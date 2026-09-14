@@ -12,6 +12,7 @@ release beside the plate.
 Recent moves, newest first: {moves}
 
 [rules]
-- If recent moves show GRASP(empty), do not GRASP in place again; prioritize MV_UP, MV_BACK, MV_DOWN, or MV_FWD
-- NEVER OSCILLATE: Do NOT choose the opposite of the newest recent move (Pairs: MV_LEFT/MV_RIGHT, MV_FWD/MV_BACK)
-- When opposite directions appear in recent moves, prioritize MV_DOWN or MV_UP
+- After GRASP(empty), re-check alignment and height in the current images before trying again; do not repeat GRASP in place.
+- An opposite move is allowed to correct visible overshoot. If directions alternate, re-judge alignment from current images instead of repeating the same overshoot.
+- During GRASP, if small opposite corrections alternate around a target already roughly centered between the fingertips, descend one step and re-check alignment from the closer view. Do not descend if the target is still outside the grasp corridor.
+- GRASP(no-op) or RELEASE(no-op) means the gripper was already in that state. Do not repeat that command; check DONE WHEN against the current images and report DONE if satisfied, otherwise choose the remaining useful action.

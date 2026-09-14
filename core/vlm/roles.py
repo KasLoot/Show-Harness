@@ -24,7 +24,7 @@ def _join_prompt_parts(*parts: str) -> str:
     return "\n\n".join(part.strip() for part in parts if part and part.strip())
 
 
-def _default_output_contract(extra_tokens: Sequence[str] = ()) -> str:
+def _default_output_contract(extra_tokens: Sequence[str] = (), include_wrist: bool = False) -> str:
     """The controller's default answer protocol: one atomic-action token as JSON.
 
     This is the output contract that used to live inside ``prompts/controller.txt``; it
@@ -35,10 +35,13 @@ def _default_output_contract(extra_tokens: Sequence[str] = ()) -> str:
     ``plugins.rotation``'s ROTATE_CW/CCW), so the offered set matches ``allowed_tokens``.
     """
     tokens = tuple(CONTROLLER_TOKENS) + tuple(extra_tokens)
+    example = '{"decision":"ONE_ACTION","reasoning":"one visual sentence"}'
+    if include_wrist:
+        example = '{"decision":"ONE_ACTION","target_in_wrist":true,"reasoning":"one visual sentence"}'
     return (
         "Choose exactly one action:\n"
         + ", ".join(tokens)
-        + '\nReturn JSON only: {"decision":"ONE_ACTION","reasoning":"one visual sentence"}'
+        + "\nReturn JSON only: " + example
     )
 
 
@@ -68,8 +71,8 @@ def _token_only_prompt(prompt: str, allowed_tokens: Sequence[str]) -> str:
     )
 
 
-def _decision_schema(allowed_tokens: Sequence[str]) -> dict[str, Any]:
-    return {
+def _decision_schema(allowed_tokens: Sequence[str], include_wrist: bool = False) -> dict[str, Any]:
+    schema = {
         "type": "object",
         "properties": {
             "decision": {"type": "string", "enum": list(allowed_tokens)},
@@ -78,6 +81,10 @@ def _decision_schema(allowed_tokens: Sequence[str]) -> dict[str, Any]:
         "required": ["decision", "reasoning"],
         "additionalProperties": False,
     }
+    if include_wrist:
+        schema["properties"]["target_in_wrist"] = {"type": "boolean"}
+        schema["required"].append("target_in_wrist")
+    return schema
 
 
 def _complete_decision_json(
@@ -89,18 +96,21 @@ def _complete_decision_json(
     fallback_token: str | None = None,
     fallback_reason: str = "fallback after invalid decision JSON and token retry",
     debug: bool = False,
+    include_wrist: bool = False,
 ) -> VLMResponse:
     json_prompt = (
         prompt
         + '\n\nReturn JSON only. Put "decision" first, then "reasoning". '
         + 'Use one short sentence for "reasoning".'
     )
+    if include_wrist:
+        json_prompt += '\nInclude "target_in_wrist": true if the target is visible in the wrist image, false otherwise.'
     try:
         response = client.complete_json(
             json_prompt,
             agentview_image,
             wrist_image=wrist_image,
-            schema=_decision_schema(allowed_tokens),
+            schema=_decision_schema(allowed_tokens, include_wrist=include_wrist),
             max_tokens=None,
             temperature=0.0,
             chat_template_kwargs=TOKEN_CHAT_TEMPLATE_KWARGS,
@@ -117,6 +127,9 @@ def _complete_decision_json(
             )
         reasoning = str(payload.get("reasoning") or "").strip()
         normalized = {"decision": decision, "reasoning": reasoning}
+        if include_wrist:
+            visible = payload.get("target_in_wrist")
+            normalized["target_in_wrist"] = visible if isinstance(visible, bool) else None
         merged_payload = dict(response.payload)
         merged_payload["json"] = normalized
         return VLMResponse(
@@ -373,8 +386,8 @@ class ControllerAgent:
         self.mem_text_plugin = mem_text_plugin
         # Wrist-visibility consumers. variable_step_plugin (shared with the controller) sizes
         # the step from the TARGET's wrist visibility; action_chunk_plugin repeats a move while
-        # the TARGET is far. Both read the shared "WRIST: YES/NO" judgment, so whenever EITHER
-        # is enabled we render the marker (core.prompting.wrist_marker) and parse the VLM's reply into
+        # the TARGET is far. Both read the shared visibility judgment, so whenever EITHER
+        # is enabled we request a JSON boolean (or a CoT marker) and normalize the reply into
         # response.payload["target_in_wrist"] for the runner to forward.
         self.variable_step_plugin = variable_step_plugin
         self.action_chunk_plugin = action_chunk_plugin
@@ -438,7 +451,8 @@ class ControllerAgent:
         # provider) is additive; mcq (answer protocol) is one-or-the-other with the default.
         proprio_block = (
             self.proprio_plugin.render(
-                proprio, self.table_height_m, holding=(gripper_state == "CLOSED")
+                proprio, self.table_height_m, holding=(gripper_state == "CLOSED"),
+                stage=str(subgoal.get("motion", "")),
             )
             if self.proprio_plugin is not None
             else ""
@@ -456,7 +470,7 @@ class ControllerAgent:
         mem_text_rules = (
             self.mem_text_plugin.render_rules() if self.mem_text_plugin is not None else ""
         )
-        wrist_block = wrist_marker_prompt() if self._wants_wrist() else ""
+        wrist_block = wrist_marker_prompt(json_output=not self.cot_mode) if self._wants_wrist() else ""
         action_chunk_block = (
             self.action_chunk_plugin.render_prompt()
             if self.action_chunk_plugin is not None
@@ -478,7 +492,9 @@ class ControllerAgent:
                 else ()
             )
             allowed_tokens = tuple(CONTROLLER_TOKENS) + rotation_tokens
-            output_contract = _default_output_contract(rotation_tokens)
+            output_contract = _default_output_contract(
+                rotation_tokens, include_wrist=self._wants_wrist() and not self.cot_mode,
+            )
 
         prompt = _join_prompt_parts(
             self.common_context,
@@ -531,7 +547,8 @@ class ControllerAgent:
         self.last_prompt = prompt
         if review_symbol is not None:
             # The review text promises the BEFORE frame as the LAST attached image.
-            wrist_image = ([wrist_image] if wrist_image is not None else []) + [
+            wrist_image = (list(wrist_image) if isinstance(wrist_image, (list, tuple))
+                           else [wrist_image] if wrist_image is not None else []) + [
                 prev_agentview_image
             ]
         # On a rare double parse failure, commit to the last movement direction
@@ -564,12 +581,12 @@ class ControllerAgent:
                 fallback_token=fallback_token,
                 fallback_reason="controller commit-fallback after invalid JSON and token retry",
                 debug=debug,
+                include_wrist=self._wants_wrist(),
             )
         if mcq is not None:
             response = mcq.map_response(response)
-        # Shared wrist-visibility judgment: recover the WRIST: YES/NO marker from the model's
-        # reasoning/output and stash it on the payload for the runner to forward to its
-        # consumers (variable_step step size, action_chunk step count). No marker -> None.
+        # Prefer the typed visibility field; retain the legacy marker for CoT/backward
+        # compatibility. Unknown visibility stays None for conservative step selection.
         if self._wants_wrist() and isinstance(response.payload, dict):
             json_obj = response.payload.get("json")
             reasoning = json_obj.get("reasoning") if isinstance(json_obj, dict) else ""
@@ -578,7 +595,8 @@ class ControllerAgent:
                 # Letters modes: the model plans in ACT_* symbols (the prompt was
                 # symbolized), but parse_plan reads atomic tokens.
                 text = ablation.decode_symbols(text)
-            target_in_wrist = parse_wrist_marker(text)
+            visible = json_obj.get("target_in_wrist") if isinstance(json_obj, dict) else None
+            target_in_wrist = visible if isinstance(visible, bool) else parse_wrist_marker(text)
             response.payload["target_in_wrist"] = target_in_wrist
             # action_chunk: when far, recover the model's planned move sequence (PLAN: ...)
             # so the runner can execute it open-loop. [] -> single step.

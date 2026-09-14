@@ -6,6 +6,7 @@ set -euo pipefail
 #   bash scripts/setup.sh                # show what exists and what is missing
 #   bash scripts/setup.sh base           # .venv        the harness
 #   bash scripts/setup.sh base --real    #              + Franka/Piper hardware layer
+#   bash scripts/setup.sh mujoco         # .venv        + MuJoCo and Panda assets
 #   bash scripts/setup.sh serve          # .venv-vllm   serve a VLM locally
 #
 # Two venvs because their pins conflict: serving holds transformers where the harness does
@@ -97,13 +98,25 @@ Fetch weights, then serve:
 EOF
 }
 
+setup_mujoco() {
+  require_uv
+  if [ ! -f "${VENV}/bin/activate" ]; then
+    uv venv --python "${PYTHON_VERSION}" "${VENV}"
+  fi
+  uv pip install --python "${VENV}/bin/python" \
+      -r "${REPO_ROOT}/requirements/requirements-mujoco.txt"
+  uv run --no-project --python "${VENV}/bin/python" \
+      "${REPO_ROOT}/scripts/mujoco/download_panda.py"
+}
+
 case "${1:-}" in
   ""|-h|--help)  [ "${1:-}" = "" ] && status || usage ;;
   base)   shift; setup_base "$@" ;;
+  mujoco) shift; [ $# -gt 0 ] && { echo "mujoco takes no options" >&2; exit 1; }; setup_mujoco ;;
   serve)  shift; [ $# -gt 0 ] && { echo "serve takes no options" >&2; exit 1; }; setup_serve ;;
   train)  echo "Training setup lives with the training code:" >&2
           echo "  bash train/scripts/setup_llamafactory.sh              # qwen3_5 / internvl3_5" >&2
           echo "  bash train/scripts/setup_llamafactory.sh --gemma4     # add this to also train gemma4" >&2
           exit 1 ;;
-  *) echo "unknown target: $1 (base / serve)" >&2; exit 1 ;;
+  *) echo "unknown target: $1 (base / mujoco / serve)" >&2; exit 1 ;;
 esac

@@ -258,8 +258,9 @@ class RealAtomicController:
         # to command. Raise it to cover the variable-step coarse magnitude AND the MV_UP
         # distance, else e.g. up_step_m=0.08 is clipped by the 0.05 default and lifts only 5 cm.
         coarse_step_m = float(getattr(self.variable_step_plugin, "coarse_step_m", 0.0) or 0.0)
+        large_step_m = float(getattr(self.variable_step_plugin, "large_step_m", 0.0) or 0.0)
         self.max_position_delta_m = max(
-            self.max_position_delta_m, self.step_m, coarse_step_m, self.up_step_m or 0.0
+            self.max_position_delta_m, self.step_m, coarse_step_m, large_step_m, self.up_step_m or 0.0
         )
         # Optional smooth-motion plugin: ramps the setpoint start->target along an eased
         # profile instead of stepping it, and (with blend on) chains aligned consecutive
@@ -492,7 +493,7 @@ class RealAtomicController:
         by the variable-step plugin based on the EEF height + token (MV_UP / high above
         table) and the VLM's wrist-visibility judgment (``target_in_wrist`` False ->
         far -> coarse). ``kind`` labels the choice for the step record / terminal
-        ("up" / "coarse" / "fine"); "" when there was no choice to make (fixed step)."""
+        ("up" / "large" / "coarse" / "fine"); "" when there was no choice to make (fixed step)."""
         # A dedicated MV_UP distance (lift/retreat) takes priority over the step logic.
         if self.up_step_m is not None and str(token).strip().upper() == "MV_UP":
             return self.up_step_m, "up"
@@ -510,7 +511,10 @@ class RealAtomicController:
                 target_in_wrist=target_in_wrist,
             )
         )
-        return step, ("fine" if abs(step - self.step_m) < 1e-12 else "coarse")
+        if abs(step - self.step_m) < 1e-12:
+            return step, "fine"
+        large = getattr(plugin, "large_step_m", None)
+        return step, ("large" if large is not None and abs(step - large) < 1e-12 else "coarse")
 
     # -- execution ---------------------------------------------------------
     def step(

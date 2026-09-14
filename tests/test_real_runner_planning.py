@@ -98,6 +98,19 @@ def _runner(temp_dir: str, planner) -> RealEpisodeRunner:
 
 
 class RealRunnerPlanningTests(unittest.TestCase):
+    def test_simulator_sessions_use_the_physical_success_predicate(self) -> None:
+        for physical_success in (True, False):
+            with tempfile.TemporaryDirectory() as temp_dir:
+                runner = _runner(temp_dir, None)
+                runner.session.control_mode = "mujoco"
+                runner.session.check_success = lambda: physical_success
+                result = runner.run()
+                self.assertEqual(result.success, physical_success)
+                self.assertEqual(runner.logger.summary["success"], physical_success)
+                self.assertEqual(runner.logger.summary["control_mode"], "mujoco")
+                self.assertEqual(result.end_reason,
+                                 "task_success" if physical_success else "max_steps_exceeded")
+
     def test_planner_gets_both_live_views_and_the_plan_is_logged(self) -> None:
         stage = Subgoal(
             id="place",

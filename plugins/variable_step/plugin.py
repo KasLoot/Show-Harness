@@ -3,24 +3,27 @@
 The controller normally moves a fixed ``step_m`` per atomic token. When this tool is
 enabled it returns a COARSE step (e.g. 5 cm) instead of the fine ``step_m`` in these cases:
 
-  HEIGHT-BASED (strictly followed):
+  VERTICAL MOTION:
     * the token is ``MV_UP`` -- lift clear of the table quickly; and
-    * the gripper is high above the table (gap > ``high_above_table_m``) -- a coarse
-      approach from altitude, paired with the proprioception "descend first" hint.
+    * ``MV_DOWN`` while high above the table (gap > ``high_above_table_m``) -- a
+      coarse descent from altitude.
 
   WRIST-VISIBILITY (the VLM's distance signal):
     * the TARGET is NOT yet visible in the wrist view (``target_in_wrist`` False) -- the
       gripper is still far, so close distance with a big step. ``target_in_wrist`` is the
-      shared wrist-visibility judgment produced by :mod:`core.prompting.wrist_marker` (the VLM's
-      ``WRIST: YES/NO`` marker, rendered/parsed by the controller agent and forwarded by the
-      runner); this tool only consumes it.
+      shared wrist-visibility judgment normalized by the controller agent from its JSON
+      boolean or legacy ``WRIST: YES/NO`` marker and forwarded by the runner.
 
-Effective rule: coarse if MV_UP OR gap > X OR (TARGET not in wrist); otherwise the fine
-``default_step_m``. Once the TARGET is in the wrist view (close) the step is fine for
-precise alignment. The whole behaviour is controlled by the single ``enabled`` flag.
+Height alone must never force a coarse horizontal alignment: that produces repeated
+overshoot even while the target is visible. Horizontal moves are fine unless the target
+is explicitly reported outside the wrist view. Missing visibility defaults to fine.
+
+When ``large_step_m`` is configured, travel is promoted to that third size only above
+``large_above_table_m`` clearance. Omitting it preserves the original two-size policy.
 """
 from __future__ import annotations
 
+import math
 from typing import Optional
 
 
@@ -35,10 +38,20 @@ class VariableStepPlugin:
         enabled: bool = False,
         coarse_step_m: float = 0.05,
         high_above_table_m: float = 0.10,
+        large_step_m: Optional[float] = None,
+        large_above_table_m: float = 0.20,
     ) -> None:
         self.enabled = bool(enabled)
         self.coarse_step_m = max(0.0, float(coarse_step_m))
         self.high_above_table_m = max(0.0, float(high_above_table_m))
+        self.large_step_m = None if large_step_m is None else float(large_step_m)
+        self.large_above_table_m = float(large_above_table_m)
+        if self.large_step_m is not None and (
+            not math.isfinite(self.large_step_m) or not math.isfinite(self.large_above_table_m)
+            or self.large_step_m <= self.coarse_step_m
+            or self.large_above_table_m < self.large_step_m
+        ):
+            raise ValueError("Require finite large_step_m > coarse_step_m and large_above_table_m >= large_step_m")
 
     def step_m_for(
         self,
@@ -50,24 +63,27 @@ class VariableStepPlugin:
     ) -> float:
         """Return the translation magnitude (meters) to use for ``token``.
 
-        Coarse when lifting (MV_UP), when high above the table (height rules), or when the
-        TARGET is not yet in the wrist view (``target_in_wrist`` is False). Otherwise the
-        fine ``default_step_m``. ``target_in_wrist`` None (no marker) -> treated as fine.
+        Coarse for lifting, descent from altitude, or an explicitly distant target.
+        Horizontal alignment with visible/unknown targets always uses the fine step.
         """
         default = float(default_step_m)
         if not self.enabled:
             return default
-        # --- Height-based rules (strictly followed) ---
-        if str(token or "").strip().upper() == MV_UP:
-            return self.coarse_step_m
+        token = str(token or "").strip().upper()
+        gap = None
         if eef_height_m is not None and table_height_m is not None:
             try:
                 gap = float(eef_height_m) - float(table_height_m)
             except (TypeError, ValueError):
-                gap = None
-            if gap is not None and gap > self.high_above_table_m:
-                return self.coarse_step_m
+                pass
+        travel = self.coarse_step_m
+        if self.large_step_m is not None and gap is not None and math.isfinite(gap) and gap > self.large_above_table_m:
+            travel = self.large_step_m
+        if token == MV_UP:
+            return travel
+        if token == "MV_DOWN" and gap is not None and gap > self.high_above_table_m:
+            return travel
         # --- Wrist-visibility rule: far (TARGET not in the wrist view) -> big step ---
         if target_in_wrist is False:
-            return self.coarse_step_m
+            return travel
         return default

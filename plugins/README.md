@@ -50,7 +50,7 @@ plugins it builds.
 | Subtask Planning | `subgoal` | ordered plan with visually checkable completion criteria |
 | Situated Planning | `deepplan` | deferred-branch `<REASON>` pivot for conditional tasks |
 | Action Chunking | `action_chunk` | open-loop move plans while the target is far |
-| Adaptive Step | `variable_step` | coarse/fine step from the shared `WRIST: YES/NO` signal |
+| Adaptive Step | `variable_step` | fine horizontal alignment; coarse vertical travel or explicitly distant targets |
 | Visual Prompt | `affordance` | grounded contact-point dot with draw-and-verify |
 | Action History | `mem_text` | recent-move line + anti-oscillation rules |
 | Failure Recovery | `recovery`, `auto_release` | empty-grasp detection, reopen, plan rollback |

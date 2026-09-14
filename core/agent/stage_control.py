@@ -26,6 +26,9 @@ class Controller:
         recovery_context: str = "",
         prev_agentview: Any = None,
     ):
+        wrist_images = ctx.wrist
+        if ctx.obs.get("extra_views"):
+            wrist_images = ([ctx.wrist] if ctx.wrist is not None else []) + list(ctx.obs["extra_views"].values())
         return self.agent.decide(
             task=ctx.task,
             subgoal=ctx.subgoal.to_prompt_dict(),
@@ -33,7 +36,7 @@ class Controller:
             previous_direction=previous_direction,
             gripper_state=gripper_state,
             agentview_image=ctx.agentview,
-            wrist_image=ctx.wrist,
+            wrist_image=wrist_images,
             # Frame captured BEFORE the previous action executed (action-ablation
             # blind review); None everywhere else, incl. the sim runner.
             prev_agentview_image=prev_agentview,

@@ -29,7 +29,7 @@ Return an ordered JSON plan:
 2. Affordance Selection
 
 -ONE specific part -- never alternatives like "left end or middle"
--Must be visible in AgentView & bracketable by open fingers
+-Must be visible in the external camera views & bracketable by open fingers
 -Containers/Hollow objects (cups, bowls): Target left/right rim or edge.
 -Simple Solid objects (blocks): main body
 

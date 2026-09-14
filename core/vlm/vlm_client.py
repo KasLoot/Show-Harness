@@ -88,6 +88,8 @@ class VLMClient:
         # the payload rewritten (see _finalize_payload).
         self.provider = str(provider or "vllm").lower()
         self.api_dialect = str(api_dialect or self.provider).lower()
+        if self.api_dialect == "ollama" and not self.base_url.endswith("/api"):
+            self.base_url += "/api"
         self.reasoning_effort = reasoning_effort or None
         # Rate-limit / transient-error retry (on by default; tune via vlm_backends).
         self.max_retries = DEFAULT_MAX_RETRIES if max_retries is None else max(0, int(max_retries))
@@ -122,11 +124,11 @@ class VLMClient:
         return self.api_dialect == "gemini"
 
     def _is_hosted(self) -> bool:
-        """Hosted OpenAI-compatible APIs reject vLLM-only fields
-        (chat_template_kwargs / guided_* / logprobs) and need a rewritten payload."""
-        return self.provider in ("openai", "gemini") or self.api_dialect in (
+        """Non-vLLM APIs need rewritten payloads and the full decode budget."""
+        return self.provider in ("openai", "gemini", "ollama") or self.api_dialect in (
             "openai",
             "gemini",
+            "ollama",
         )
 
     def _finalize_payload(self, payload: dict[str, Any]) -> dict[str, Any]:
@@ -144,7 +146,48 @@ class VLMClient:
             determinism); reasoning_effort forwarded when set (Gemini 2.5+/3.x thinking
             models accept it via the OpenAI-compat layer; omitted otherwise so non-thinking
             models like flash-lite are unaffected).
+          * ollama: native /api/chat, base64 images, options, and separate thinking.
         """
+        if self.api_dialect == "ollama":
+            messages = []
+            for message in payload["messages"]:
+                content = message["content"]
+                if isinstance(content, str):
+                    messages.append(dict(message))
+                    continue
+                text = []
+                images = []
+                for part in content:
+                    if part["type"] == "text":
+                        text.append(part["text"])
+                    elif part["type"] == "image_url":
+                        url = part["image_url"]["url"]
+                        if not url.startswith("data:image/") or ";base64," not in url:
+                            raise ValueError("Ollama images must be base64 image data URLs")
+                        images.append(url.split(",", 1)[1])
+                    else:
+                        raise ValueError(f"Unsupported Ollama content type: {part['type']}")
+                converted = {"role": message["role"], "content": "\n".join(text)}
+                if images:
+                    converted["images"] = images
+                messages.append(converted)
+            # Ollama Cloud does not support `format`/structured outputs. Ground the
+            # schema in the prompt; the existing role parsers validate the answer.
+            if "guided_json" in payload:
+                messages[-1]["content"] += (
+                    "\nReturn only a JSON object matching this schema:\n"
+                    + json.dumps(payload["guided_json"])
+                )
+            out = {
+                "model": payload["model"], "messages": messages, "stream": False,
+                "options": {
+                    "num_predict": payload["max_tokens"],
+                    "temperature": payload["temperature"],
+                },
+            }
+            if self.reasoning_effort:
+                out["think"] = self.reasoning_effort
+            return out
         if not self._is_hosted():
             return payload
         out: dict[str, Any] = {"model": payload["model"], "messages": payload["messages"]}
@@ -196,7 +239,8 @@ class VLMClient:
         Retry-After header or a provider 'retry in Xs' / 'retryDelay' body hint; otherwise
         exponential backoff with jitter. Raises RuntimeError on a non-retryable error
         (e.g. 400/401/404) or once ``max_retries`` is exhausted."""
-        url = f"{self.base_url}/chat/completions"
+        endpoint = "chat" if self.api_dialect == "ollama" else "chat/completions"
+        url = f"{self.base_url}/{endpoint}"
         delay = self.retry_base_delay_s
         last = "unknown error"
         auth_refreshed = False  # at most one credential reload per request
@@ -219,7 +263,7 @@ class VLMClient:
                 last = f"request error: {exc}"  # network/tunnel hiccup -> retry
             else:
                 if resp.status_code < 400:
-                    data, problem = _chat_completion_data(resp)
+                    data, problem = _chat_completion_data(resp, self.api_dialect)
                     if data is not None:
                         return data
                     last = f"bad completion body: {problem}"  # proxy glitch -> retry
@@ -271,7 +315,8 @@ class VLMClient:
         )
 
     def health_check(self, wait_s: float = 0.0, poll_s: float = 5.0) -> None:
-        url = f"{self.base_url}/models"
+        endpoint = "tags" if self.api_dialect == "ollama" else "models"
+        url = f"{self.base_url}/{endpoint}"
         deadline = time.monotonic() + max(0.0, float(wait_s))
         last_error = None
         while True:
@@ -287,7 +332,7 @@ class VLMClient:
             if time.monotonic() >= deadline:
                 if self._is_hosted():
                     hint = (
-                        f"OpenAI-compatible endpoint not ready at {url}. Check base_url, the "
+                        f"Model endpoint not ready at {url}. Check base_url, the "
                         "model id, and the configured api_key_env in configs/secrets.env "
                         "or your shell."
                     )
@@ -673,8 +718,8 @@ class VLMClient:
         return data, raw_text, latency_s
 
 
-def _chat_completion_data(response) -> tuple[Optional[dict[str, Any]], str]:
-    """Parse and validate a 2xx /chat/completions body.
+def _chat_completion_data(response, api_dialect="vllm") -> tuple[Optional[dict[str, Any]], str]:
+    """Validate a 2xx chat body and normalize native Ollama replies to choices.
 
     Returns ``(data, "")`` when the body is a usable completion, else ``(None,
     problem)`` so ``_post_chat`` retries it as transient: a relaying proxy can answer
@@ -689,6 +734,14 @@ def _chat_completion_data(response) -> tuple[Optional[dict[str, Any]], str]:
         return None, f"unexpected body type: {type(data).__name__}"
     if data.get("error"):
         return None, f"error payload: {json.dumps(data['error'], ensure_ascii=False)[:300]}"
+    if api_dialect == "ollama":
+        message = data.get("message")
+        if not isinstance(message, dict) or not isinstance(message.get("content"), str):
+            return None, "Ollama response has no message content"
+        if not message["content"].strip() or data.get("done") is not True:
+            return None, "Ollama returned no completed answer; increase max_tokens for thinking models"
+        # Keep thinking in the raw payload for diagnostics, never execute it as an answer.
+        data = {**data, "choices": [{"message": {"content": message["content"]}}]}
     choices = data.get("choices")
     if not isinstance(choices, list) or not choices or not isinstance(choices[0], dict):
         return None, "response has no choices"

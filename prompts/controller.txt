@@ -10,7 +10,7 @@ Gripper now: {gripper_state}
 {proprio}
 
 DIRECTION:
-Is STAGE for grasping AND TARGET inside the wrist view?
+Is STAGE GRASP, MOVE, or PLACE, AND is TARGET inside the wrist view?
 A) YES -> wrist is the primary guide. Judge AFFORD's position vs the {gripper_color} gripper and take the direction of LARGEST deviation:
 - AFFORD to the gripper's left  -> MV_LEFT
 - AFFORD to the gripper's right -> MV_RIGHT
@@ -33,6 +33,7 @@ ATTENTION:
 - DONE only when "DONE WHEN" is already visible in the images
 
 GRIPPER:
+{gripper_proprio}
 - GRASP when BOTH AgentView and Wrist view confirm the {affordance} is clearly between the center of two grippers
 - RELEASE only when the held object is above its destination and lowered onto it
 {variable_step}

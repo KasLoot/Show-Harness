@@ -10,6 +10,9 @@ each step moves ~{fine_cm} cm
 [step_sizes_coarse]
 each step moves ~{fine_cm} cm ({coarse_cm} cm)
 
+[step_sizes_three]
+fine steps move ~{fine_cm} cm, coarse steps ~{coarse_cm} cm, and large steps ~{large_cm} cm
+
 [hint_descend]
 If height > {high_cm} cm, MV_DOWN first.
 

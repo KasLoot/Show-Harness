@@ -236,6 +236,7 @@ class DualControllerAgent:
                 proprio,
                 self.table_heights.get(side),
                 holding=(gripper_state == "CLOSED"),
+                stage=str(subgoal.get("motion", "")),
             )
             if self.proprio_plugin is not None
             else ""

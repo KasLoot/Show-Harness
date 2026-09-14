@@ -5,9 +5,10 @@ view?* ``variable_step`` uses it to pick the per-command step magnitude; ``actio
 uses it to pick how many steps to commit per VLM call. Because it is one VLM judgment, the
 prompt line and its parser live here (shared infrastructure), not inside any single tool.
 
-The :class:`ControllerAgent` renders the marker whenever ANY consumer is enabled and parses
-the VLM's reply into ``response.payload["target_in_wrist"]`` (True / False / None when no
-explicit marker was emitted). Tools then read that one field; they never render or parse it.
+The :class:`ControllerAgent` requests a JSON boolean (or a legacy prose marker for CoT)
+whenever ANY consumer is enabled, then normalizes the reply into
+``response.payload["target_in_wrist"]`` (True / False / None for unknown visibility).
+Tools consume that field without interpreting free-form descriptions of the scene.
 """
 from __future__ import annotations
 
@@ -22,10 +23,10 @@ from plugins.prompt_text import fragment
 _WRIST_MARKER = re.compile(r"WRIST\s*[:=]\s*(YES|NO)\b", re.IGNORECASE)
 
 
-def wrist_marker_prompt() -> str:
-    """The controller-prompt line asking the VLM to report wrist visibility as a marker.
+def wrist_marker_prompt(json_output: bool = False) -> str:
+    """Request a typed JSON visibility field or the legacy prose marker.
     The text lives in the co-located wrist_marker.txt."""
-    return fragment(__file__, "wrist_marker.txt", "marker")
+    return fragment(__file__, "wrist_marker.txt", "json" if json_output else "marker")
 
 
 def parse_wrist_marker(text: str) -> Optional[bool]:

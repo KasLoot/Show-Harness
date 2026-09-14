@@ -1,6 +1,6 @@
 # Simulators
 
-Show-Harness integrates two simulators. They serve two roles:
+Show-Harness integrates MuJoCo, ManiSkill, and RoboLab (Isaac Lab). They serve two roles:
 
 1. **Zero-shot evaluation** — run the deployment pipelines (the subgoal planner
    stack or the fine-tuned action model, see `docs/finetuned.md`) in sim
@@ -12,6 +12,176 @@ Show-Harness integrates two simulators. They serve two roles:
 Each integration keeps the deployment contracts: the same nine-token action
 vocabulary, the same image transforms (`core/record/images.py`), and measured
 per-config step calibration so one token means ~2 cm of physical travel.
+
+## MuJoCo + Ollama Cloud
+
+Run the zero-shot planner/controller with a Franka Panda in a local MuJoCo
+pick-and-place scene. The default model is `glm-5.3-flash:cloud` at
+`https://ollama.com/api`. No local model server, model weights, GPU, or robot
+hardware is required. The initial scene contains a red cube and a blue target pad.
+The shared hardware imports may print a `pyrealsense2` warning; MuJoCo does not use it.
+
+```bash
+# Creates/uses .venv with uv; downloads only the official Panda MJCF and meshes.
+bash scripts/setup.sh mujoco
+
+# Use an existing exported key, or add this line to gitignored configs/secrets.env:
+# OLLAMA_API_KEY="your-key"
+# Keys: https://ollama.com/settings/keys
+
+# Check all six 2 cm moves, empty-grasp recovery, three cameras, and recording (no API calls).
+uv run --no-project python scripts/run_mujoco.py --smoke-test --record
+
+# Run the complete model-controlled task; exits 0 only on physical success.
+uv run --no-project python scripts/run_mujoco.py
+# Add --record to save videos and their annotated timeline.
+uv run --no-project python scripts/run_mujoco.py --record
+
+# Interactive MuJoCo viewport on macOS (mjpython is required for the viewer).
+.venv/bin/mjpython scripts/run_mujoco.py --gui
+# Linux/Windows:
+# uv run --no-project python scripts/run_mujoco.py --gui
+```
+
+Linux without a display may need `MUJOCO_GL=egl` (EGL drivers) or
+`MUJOCO_GL=osmesa` (Mesa) before launching. Offscreen rendering on macOS uses
+the native graphics session; `MUJOCO_GL=egl` is not a macOS setting.
+
+Configuration: [`configs/robot_mujoco.yaml`](../configs/robot_mujoco.yaml).
+`--model`, `--vlm-url`, `--max-steps`, and `--log-dir` override it for one run.
+`OLLAMA_MODEL` and `OLLAMA_BASE_URL` are also supported. The model must accept
+images. The provider uses native `/api/chat` with bearer authentication, ordered
+base64 camera images, and non-streaming replies. Ollama Cloud currently does not
+support structured output constraints, so the harness supplies the JSON contract
+in the prompt and validates action tokens locally. `reasoning_effort: low` keeps
+GLM's thinking enabled; `max_tokens` includes its reasoning budget.
+See [Ollama Cloud](https://docs.ollama.com/cloud),
+[structured outputs](https://docs.ollama.com/capabilities/structured-outputs), and
+[GLM-5.3-Flash](https://ollama.com/library/glm-5.3-flash).
+
+This reuses the existing zero-shot runner, subgoal planner, controller prompts,
+Franka action vocabulary, recovery, and episode logger. The simulator session
+converts Cartesian setpoints to joint targets using damped Jacobian IK; MuJoCo
+actuators, contacts, and friction perform the motion and grasp. Arm and gripper
+targets follow the existing minimum-jerk profile over `motion_s` (default 0.35 s),
+then hold for `settle_s` (0.15 s). The live viewer refreshes throughout the action
+at approximately 60 fps and is paced to simulation time. Headless runs can
+compute faster; recorded video uses simulation time for smooth playback.
+Physics pauses during cloud calls, making motion independent of network latency.
+`fine_step_m`, `motion_s`, `settle_s`, `ik_damping`,
+`reset_qpos`, and `z_floor_m` remain configurable.
+`observation_context` and `prompts/controller_mujoco.txt` describe the three cameras
+and their action directions to the model; update them when changing camera geometry.
+The planner and controller both receive separate images in this order: Side (A),
+Wrist (B), Front (C). The side/front views are level orthographic views centered on
+the manipulation workspace, with a 0.56 m vertical span. They show X/Z and Y/Z,
+respectively; screen-up/down is height in these views. Wrist remains the primary
+guide for fine alignment across the table. Side/front `pos`, `xyaxes`, and `fovy`
+are set in `assets/mujoco/pick_place.xml`; for these orthographic cameras, a smaller
+`fovy` zooms in. The old AgentView and oblique global cameras have been removed.
+The scene requires MuJoCo 3.5+ for the
+[`projection` camera attribute](https://mujoco.readthedocs.io/en/3.8.0/changelog.html#version-3-5-0-february-12-2026).
+
+Rollouts are written under `rollouts/mujoco/ollama/`, including camera observations,
+prompts, actions, metadata with credentials redacted, a summary, and videos.
+Success requires the cube to rest on the pad, the fingers to be open, and
+the gripper to have retreated; a model's `DONE` alone is insufficient. The physical
+predicate is checked after every action, and a successful episode stops immediately
+to prevent later model commands from undoing it. The
+built-in physical predicate is for this pick-and-place scene. If changing the
+scene/task, update `MujocoSession.check_success` along with it. This scene uses
+stock Panda fingers and has not been calibrated for the released fine-tuned policies.
+
+### Optional variable step size
+
+Movement steps remain fixed at `fine_step_m` (2 cm) by default. Add
+`--variable-step` to connect the existing adaptive-step plugin:
+
+```bash
+.venv/bin/mjpython scripts/run_mujoco.py --gui --variable-step
+# Optional recording and an offline calibration check:
+uv run --no-project python scripts/run_mujoco.py --smoke-test --variable-step --record
+```
+
+With the flag, the available sizes are `fine_step_m: 0.02`, `coarse_step_m: 0.05`,
+and `large_step_m: 0.10` (metres). Travel uses 5 cm for `MV_UP`, for `MV_DOWN`
+above `high_above_table_m` (10 cm), or for an explicitly distant target. That
+travel increases to 10 cm only above `large_above_table_m` (20 cm) of clearance
+from the table-contact reference. Near-table descent uses 2 cm when the target
+is visible. Horizontal alignment always uses `fine_step_m`
+when the target is visible or visibility is unknown, regardless of height.
+This avoids large left/right corrections repeatedly overshooting a visible cube.
+The VLM keeps the same movement tokens and returns a `target_in_wrist` JSON
+boolean alongside its decision. Legacy `WRIST: YES/NO` markers are still accepted;
+missing or invalid visibility does not trigger coarse horizontal motion.
+No extra model call is needed. The same plugin instance controls the prompt and
+execution. The flag is required even if a config declares `plugins.variable_step`.
+
+Alignment is approximate at each discrete step: once roughly centered, the model
+can descend and refine from a closer image. Visible targets use the top-down wrist
+view for grasp, transport, and placement alignment, avoiding height/depth confusion
+in the external view. Recent-action memory includes both
+gripper commands and marks unchanged commands as `(no-op)`, and the prompt shows
+the measured gripper width. This supplies feedback for repeated commands without
+automatically choosing a descent or declaring a stage complete.
+Height-based descent hints are suppressed during release and retreat.
+
+The smooth motion and safety floor still apply. In variable-step mode, longer
+translations receive proportionally longer ramps to maintain comparable speed;
+the default fixed-step timing is unchanged. `steps.jsonl` records the chosen
+`step_kind`, `step_cm`, and `target_in_wrist`; with `--record`, completed-step
+annotations include these fields too, with `step_kind` set to `fine`, `coarse`,
+or `large`. The smoke test supplies a scripted far-target signal to check all
+six large directions without a VLM call. Older configs without `large_step_m`
+retain the two-size behavior.
+
+### Recording and annotated logs
+
+Recording is disabled by default. Add `--record` (also with `--gui` or
+`--smoke-test`) to enable it. Each recorded run's `videos/` directory contains:
+
+| File | Content |
+| --- | --- |
+| `side.mp4` | Close level side view of the manipulation workspace |
+| `wrist.mp4` | Gripper-mounted camera |
+| `front.mp4` | Close level front view of the manipulation workspace |
+| `combined.mp4` | Side / Wrist above, Front / VLM output and decision below |
+| `annotations.jsonl` | Timestamped decisions, full VLM output, execution, recovery, and results |
+
+The camera videos are 512 × 512 and the four-panel canvas is 1024 × 1088 at
+the default resolution. All four videos have identical frame counts and run at
+30 fps. Frames are captured during physics steps, so the recordings show the
+motion between actions. Cloud waiting time is omitted; each action's result is
+held for one second for readability. These video pauses do not advance physics.
+Change `recording.fps` and `recording.decision_hold_s` in the config to tune
+recording. MuJoCo uses this four-panel recorder instead of the generic per-decision
+analysis video. Without `--record`, no videos are created; ordinary step logs and observation images are still
+saved. `summary.json` and the printed `video_path` point to the combined video
+when recording is enabled and use an empty string otherwise.
+
+Each annotation includes UTC, simulation time, video time, frame index, stage,
+decision source, and explanatory text. `decision` events precede the motion;
+`step_complete` events include the action result and `[frame_start, frame_end)`
+interval in every video (indices start at zero). `vlm_output` retains the full
+answer even when the canvas shortens long text. Gripper commands, including an
+automatic reopen after an empty grasp, are annotated separately. Interruptions
+and errors finalize the videos and preserve the log; frames stream to disk as
+playable fragmented MP4s while the run is in progress.
+
+The same Side, Wrist, and Front cameras feed the model and recorder, independently
+of the interactive viewer. Observations are saved in `images/side`, `images/wrist`,
+and `images/front`. The shared runner's internal `agentview` input now carries Side.
+`--smoke-test --record` also writes example recordings to
+`rollouts/mujoco/smoke_test/videos/`, marked `smoke_test` rather than VLM decisions.
+
+The setup downloads the Apache-2.0-licensed
+[MuJoCo Menagerie Panda](https://github.com/google-deepmind/mujoco_menagerie/tree/8161bba264d7fa7c99ca301e91e7fb44737676ad/franka_emika_panda)
+and its license at a pinned revision into ignored `third_party/mujoco_menagerie/`.
+The offline physical grasp-and-place regression check is:
+
+```bash
+uv run --no-project python -m unittest tests.test_mujoco tests.test_ollama tests.test_mujoco_recording
+```
 
 ## ManiSkill
 

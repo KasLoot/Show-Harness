@@ -546,7 +546,7 @@ def make_controller(
     step_m = cfg.get("fine_step_m")
     plugins = PluginsConfig.from_config(cfg)
     grasp_min_width_m = recovery_empty_width_m(cfg) if plugins.enabled("recovery") else None
-    # Variable-step tool: coarse step when high above the table or lifting (MV_UP). The
+    # Variable-step tool: coarse descent from altitude or lifting (MV_UP). The
     # controller compares the EEF height against the table-contact reference; disabled ->
     # the controller always uses the fixed step_m.
     variable_step_plugin = VariableStepPlugin(
@@ -729,7 +729,7 @@ def recovery_open_width_m(cfg: dict[str, Any]) -> float:
 
 def high_above_table_m(cfg: dict[str, Any]) -> float:
     """Threshold X (m): above this height the controller is told to descend first, and
-    (if variable_step is on) uses the coarse step. Shared by proprioception + variable_step."""
+    (if variable_step is on) uses a coarse descent. Shared by proprioception + variable_step."""
     return float(cfg.get("high_above_table_m", 0.10))
 
 
@@ -941,6 +941,7 @@ def make_runner(
                     # coarse step only when variable_step is on (else every step is fine).
                     fine_step_m=controller.step_m,
                     coarse_step_m=(vstep.coarse_step_m if (vstep is not None and vstep.enabled) else None),
+                    large_step_m=(getattr(vstep, "large_step_m", None) if (vstep is not None and vstep.enabled) else None),
                 ),
                 mcq_plugin=McqPlugin(plugins.enabled("mcq", default=False)),
                 mem_text_plugin=mem_text_plugin,

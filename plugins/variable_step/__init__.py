@@ -1,5 +1,5 @@
-"""Variable step-size capability: coarse moves when high/lifting or when the TARGET is not
-yet in the wrist view (VLM ``WRIST: YES/NO``); fine moves once close.
+"""Variable step-size capability: coarse vertical travel or explicitly distant targets;
+fine horizontal alignment when the target is visible or visibility is unknown.
 
 Public API:
   * ``VariableStepPlugin`` -- maps (token, EEF height, wrist visibility) to the per-command

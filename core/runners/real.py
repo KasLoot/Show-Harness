@@ -41,7 +41,7 @@ from interpreters.franka_atomic_controller import AtomicStepResult, FrankaAtomic
 from core.runners.preemption import InterruptibleDecider
 from core.record.episode_logger import EpisodeLogger, status_flags
 from core.franka.franka_session import FrankaSession
-from core.record.images import to_uint8_hwc
+from core.record.images import save_png, to_uint8_hwc
 from core.v0_types import EpisodeResult, SkillContext, Subgoal, V0Config
 from plugins.subgoal import SubgoalPlanner
 
@@ -136,6 +136,8 @@ class RealEpisodeRunner:
 
     # -- main loop ---------------------------------------------------------
     def run(self) -> EpisodeResult:
+        recorder = getattr(self.session, "recorder", None)
+        success_check = getattr(self.session, "check_success", None)
         success = False
         end_reason = "max_steps_exceeded"
         steps = 0
@@ -162,9 +164,8 @@ class RealEpisodeRunner:
 
         # Start from a known, open-gripper state. The controller is already synced
         # (and the Z floor locked) by the caller before the rollout begins.
-        self.controller.step(RELEASE_TOKEN)
-
         try:
+            self.controller.step(RELEASE_TOKEN)
             obs = self.session.get_observation()
             agentview, wrist = self._images(obs)
             if self.planner is not None:
@@ -196,17 +197,24 @@ class RealEpisodeRunner:
                         pass
 
                 image_roles = [
-                    "LIVE AgentView: authoritative global scene and object positions."
+                    f"LIVE {obs.get('primary_camera', 'AgentView')}: current external scene and object positions."
                 ]
                 if live_wrist is not None:
                     image_roles.append(
                         "LIVE Wrist view: local gripper detail only; do not infer hidden global positions."
                     )
+                extra_views = obs.get("extra_views", {})
+                for name, frame in extra_views.items():
+                    save_png(self.logger.run_dir / f"planner_{name}.png", frame)
+                    image_roles.append(f"LIVE {name.title()} view: complementary external scene and object positions.")
+                plan_images = live_wrist
+                if extra_views:
+                    plan_images = ([live_wrist] if live_wrist is not None else []) + list(extra_views.values())
 
                 subgoals, raw_plan = self.planner.plan(
                     self.task,
                     plan_agentview,
-                    wrist=live_wrist,
+                    wrist=plan_images,
                     debug=self.debug,
                     image_roles=image_roles,
                 )
@@ -451,6 +459,15 @@ class RealEpisodeRunner:
                 # ends this one at cruise speed and the arm flows through the chunk instead of
                 # stopping once per token. The last move of the chunk closes the run normally.
                 # STILL (a DAGGER hold) executes nothing: no re-command, the arm holds.
+                if recorder is not None:
+                    recorder.begin_step(
+                        step_idx=step_idx,
+                        stage=f"{current_index + 1}/{len(subgoals)} {subgoal.motion}: {subgoal.target}",
+                        token=token, annotation=self._step_reason(response, human_kind, open_loop),
+                        output=getattr(response, "raw_text", ""),
+                        source=("human" if human_kind else "action_chunk" if open_loop
+                                else "vlm" if response is not None else "recovery"),
+                    )
                 if token == STILL_TOKEN:
                     result = None
                 else:
@@ -510,17 +527,18 @@ class RealEpisodeRunner:
                     recent_moves.insert(0, token)
                     del recent_moves[self.recent_moves_max:]
                     current_direction = token
-                elif token == GRASP_TOKEN:
-                    # Record GRASP too (it is not a MOVE_ATOM) so the VLM can see it just
-                    # tried to grasp and apply the "do not GRASP in place again" rule.
-                    recent_moves.insert(0, GRASP_TOKEN)
+                elif token in GRIPPER_TOKENS:
+                    # The next decision must see RELEASE too, especially when repeating
+                    # an already-open/closed command had no effect on the scene.
+                    noop = "(noop)" in str(getattr(result, "note", ""))
+                    recent_moves.insert(0, f"{token}(no-op)" if noop else token)
                     del recent_moves[self.recent_moves_max:]
                     current_direction = None
                 elif token in ROTATE_ATOMS:
                     recent_moves.insert(0, token)
                     del recent_moves[self.recent_moves_max:]
                     current_direction = None
-                elif token in GRIPPER_TOKENS or subgoal_done:
+                elif subgoal_done:
                     current_direction = None
 
                 # Blind review bookkeeping: this iteration's pre-execution frame
@@ -538,6 +556,9 @@ class RealEpisodeRunner:
                     review_frame = None
                     review_token = None
 
+                # End a simulated task as soon as it succeeds, before another model
+                # command can undo the placement or retreat.
+                physical_success = callable(success_check) and bool(success_check())
                 record = self._record(
                     step_idx=step_idx,
                     subgoal=subgoal,
@@ -548,10 +569,12 @@ class RealEpisodeRunner:
                     response=response,
                     obs=obs,
                     subgoal_done=subgoal_done,
-                    success=plan_complete,
+                    success=physical_success if callable(success_check) else plan_complete,
                     recovery_decision=recovery_decision,
                     human_kind=human_kind,
                 )
+                if recorder is not None:
+                    recorder.end_step(record)
                 self._show_live(
                     step_idx,
                     agentview,
@@ -582,12 +605,13 @@ class RealEpisodeRunner:
                     agentview=agentview,
                     wrist=wrist,
                     record=record,
+                    **({"extra_views": obs["extra_views"]} if obs.get("extra_views") else {}),
                 )
                 self._write_action_table(step_idx)
 
-                if plan_complete:
+                if plan_complete or physical_success:
                     success = True
-                    end_reason = "plan_complete"
+                    end_reason = "task_success" if physical_success else "plan_complete"
                     break
                 if (
                     recovery_decision is not None
@@ -616,16 +640,32 @@ class RealEpisodeRunner:
                 elapsed = time.monotonic() - loop_started
                 if self.loop_period_s > elapsed:
                     time.sleep(self.loop_period_s - elapsed)
+            # Simulator sessions provide a physical predicate. A model's DONE is
+            # sufficient on hardware, but cannot certify success in a simulator.
+            if callable(success_check):
+                success = bool(success_check())
+                if success:
+                    end_reason = "task_success"
+                elif end_reason == "plan_complete":
+                    end_reason = "task_not_complete"
         except KeyboardInterrupt:
             end_reason = "interrupted"
             print(
                 "\n[run-real] Ctrl+C received -- stopping rollout and compiling the "
                 "visualization video..."
             )
+        except Exception as exc:
+            end_reason = "error"
+            if recorder is not None:
+                recorder.event("error", annotation=str(exc), error_type=type(exc).__name__)
+            raise
         finally:
             video_path = self.logger.close(
                 success=success, fps=video_fps(self.config.video_fps)
-            )
+            ) or ""
+            if recorder is not None:
+                recorder.finish(success, end_reason)
+                video_path = recorder.paths["combined"]
             self.logger.write_summary(
                 {
                     "success": success,
@@ -634,7 +674,9 @@ class RealEpisodeRunner:
                     "end_reason": end_reason,
                     "video_path": str(video_path),
                     "run_dir": str(self.logger.run_dir),
-                    "control_mode": "real",
+                    "control_mode": getattr(self.session, "control_mode", "real"),
+                    **({"recordings": {k: str(v) for k, v in recorder.paths.items()}}
+                       if recorder is not None else {}),
                     "task": self.task,
                     "gripper_color": self.gripper_color,
                     "z_floor_m": self.controller.z_floor_m,
@@ -885,6 +927,9 @@ class RealEpisodeRunner:
         if step_kind:
             record["step_kind"] = step_kind
             record["step_cm"] = round(float(getattr(result, "step_m", 0.0)) * 100.0, 1)
+        response_payload = getattr(response, "payload", None) or {}
+        if "target_in_wrist" in response_payload:
+            record["target_in_wrist"] = response_payload["target_in_wrist"]
         if reasoning or latency_ms is not None:
             c_entry: dict[str, Any] = {}
             if latency_ms is not None:
@@ -902,6 +947,8 @@ class RealEpisodeRunner:
             if wrist_dot:
                 record["afford_wrist"] = wrist_dot
         note = str(getattr(result, "note", "") or "")
+        if "(noop)" in note:
+            record["noop"] = True
         if note and "z-floor" in note:
             record["blocked"] = "z_floor"
         elif note and ("reach clamp" in note or "reach fallback" in note):

@@ -5,3 +5,6 @@ enabled; parsed back by core/prompting/wrist_marker.py). See plugins/prompt_text
 
 [marker]
 WRIST CHECK: begin your reasoning with `WRIST: YES` if the TARGET is visible in the wrist view, else `WRIST: NO`.
+
+[json]
+WRIST CHECK: include "target_in_wrist" in your JSON response: true if the TARGET is visible in the current wrist image, false otherwise. Use a JSON boolean, not a string. Choose directions from the current images; the stage description may describe an earlier pose.

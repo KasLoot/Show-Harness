@@ -1,0 +1,63 @@
+# Zero-shot Show-Harness on the official MuJoCo Menagerie Franka Panda.
+task: Pick up the red cube, place it on the blue pad, release it, and retreat upward.
+max_steps: 80
+log_dir: rollouts/mujoco
+camera_resolution: 512
+# Side/front camera geometry is defined in assets/mujoco/pick_place.xml.
+recording:
+  fps: 30
+  decision_hold_s: 1.0 # Hold the result for readability; cloud waiting time is omitted.
+use_wrist_image: true
+gripper_color: black
+observation_context: |
+  Three simultaneous images: A is the level Side camera, B is the wrist camera
+  looking straight down, and C is the level Front camera.
+  In Side (A), screen-right is MV_FWD and screen-left is MV_BACK.
+  In Front (C), screen-right is MV_RIGHT and screen-left is MV_LEFT.
+  In BOTH external views, screen-up/down is vertical height (MV_UP/MV_DOWN),
+  not travel across the table. Use both views to resolve occlusion and depth.
+  In Image B, the grasp point is the exact image center, halfway between the black fingertips.
+  Center the object in BOTH image axes: below center means MV_FWD, above center means
+  MV_BACK, left means MV_LEFT, and right means MV_RIGHT. Image-down is horizontal
+  travel across the table, not a command to lower the arm. Once the object is roughly
+  centered in both axes, descend and refine alignment from the closer view; do not
+  demand pixel-perfect centering before lowering with discrete movement steps.
+  Before choosing a movement, check DONE WHEN. Emit DONE as soon as the current stage
+  is satisfied so the next stage can start. GRASP on an already CLOSED gripper and
+  RELEASE on an already OPEN gripper have no effect; do not repeat them.
+fine_step_m: 0.02
+coarse_step_m: 0.05 # Used only with --variable-step.
+large_step_m: 0.10 # Long travel only with enough table clearance; never visible-target XY alignment.
+high_above_table_m: 0.10 # Coarse descent above this gap; height never coarsens horizontal alignment.
+large_above_table_m: 0.20 # Large travel above this table-contact clearance (metres).
+z_floor_m: 0.025 # TCP is the midpoint of the stock Panda fingertips.
+motion_s: 0.35 # Smooth arm/gripper target ramp with zero endpoint velocity/acceleration.
+settle_s: 0.15 # Hold the final target after the ramp; total action duration remains 0.5 s.
+ik_damping: 0.03
+reset_qpos: [0, -0.25589361, 0, -2.60119817, 0, 2.34530379, 0.78539816]
+empty_width_m: 0.005
+open_width_m: 0.065
+plugins:
+  subgoal: true
+  proprioception: true
+  recovery: true
+  mem_text: true
+v0:
+  max_subgoal_steps: 40
+  max_replans: 1
+  video_fps: 2
+vlm_backend: ollama
+vlm:
+  timeout_s: 120
+  temperature: 0.0
+vlm_backends:
+  ollama:
+    provider: ollama
+    base_url: https://ollama.com/api
+    base_url_env: OLLAMA_BASE_URL
+    model: gemma4:cloud
+    model_env: OLLAMA_MODEL
+    api_key_env: OLLAMA_API_KEY
+    max_tokens: 8192
+    reasoning_effort: low
+    reasoning_cot: false

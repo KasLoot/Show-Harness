@@ -88,6 +88,8 @@ class EpisodeLogger:
         task_id: int,
         variant: str | None = None,
         video_fps: float = 2.0,
+        record_video: bool = True,
+        primary_camera: str = "agentview",
     ) -> None:
         now = datetime.now(timezone(timedelta(hours=8)))
         date_stamp = now.strftime("%m%d")
@@ -98,7 +100,7 @@ class EpisodeLogger:
         if variant:
             base_dir = base_dir / variant
         self.run_dir = base_dir / date_stamp / f"task_{task_id}" / time_stamp
-        self.agentview_dir = self.run_dir / "images" / "agentview"
+        self.agentview_dir = self.run_dir / "images" / primary_camera
         self.wrist_dir = self.run_dir / "images" / "wrist"
         self.run_dir.mkdir(parents=True, exist_ok=True)
         self._steps_path = self.run_dir / "steps.jsonl"
@@ -118,7 +120,7 @@ class EpisodeLogger:
         self.video = StreamingVideoWriter(
             self.run_dir / "rollout_live.mp4",
             fps=min(30.0, max(0.5, float(video_fps))),
-        )
+        ) if record_video else None
 
     def write_metadata(self, data: dict[str, Any]) -> None:
         with (self.run_dir / "metadata.json").open("w", encoding="utf-8") as f:
@@ -158,6 +160,7 @@ class EpisodeLogger:
         agentview: np.ndarray,
         wrist: Optional[Any],
         record: dict[str, Any],
+        extra_views: Optional[dict[str, np.ndarray]] = None,
     ) -> None:
         """``wrist`` is one frame (single-arm), or a [left, right] pair (dual-arm) --
         the pair is stored side by side and rendered as separate analysis panels."""
@@ -172,6 +175,8 @@ class EpisodeLogger:
                 else wrist
             )
             save_png(wrist_path, stored)
+        for name, frame in (extra_views or {}).items():
+            save_png(self.run_dir / "images" / name / f"{step_idx:04d}.png", frame)
         self._logged_steps.add(int(step_idx))
         # steps.json keeps the full reasoning; steps.jsonl gets a reasoning-truncated copy.
         self._full_records.append(_jsonable(record))
@@ -180,9 +185,10 @@ class EpisodeLogger:
             + "\n"
         )
         self._steps_file.flush()
-        self.video.append(
-            _make_analysis_frame(agentview=agentview, wrist=wrist, record=record)
-        )
+        if self.video is not None:
+            self.video.append(
+                _make_analysis_frame(agentview=agentview, wrist=wrist, record=record)
+            )
 
     def log_debug_payload(self, step_idx: int, payload: dict[str, Any]) -> None:
         self.debug_dir.mkdir(parents=True, exist_ok=True)
@@ -298,10 +304,12 @@ class EpisodeLogger:
             return f"unverified: {type(exc).__name__}"
         return "verified" if actual == digest else f"MISMATCH saved={actual}"
 
-    def close(self, success: bool, fps: float) -> Path:
+    def close(self, success: bool, fps: float) -> Optional[Path]:
         self._steps_file.close()
         with self._steps_json_path.open("w", encoding="utf-8") as f:
             json.dump(self._full_records, f, indent=2, ensure_ascii=False)
+        if self.video is None:
+            return None
         video_path = self.run_dir / (
             "rollout_success.mp4" if success else "rollout_failure.mp4"
         )
@@ -540,7 +548,7 @@ def _font(size: int, bold: bool = False) -> ImageFont.ImageFont:
                 return ImageFont.truetype(f"{base}/{name}", size=size)
             except OSError:
                 pass
-    return ImageFont.load_default()
+    return ImageFont.load_default(size=size)
 
 
 def _vlm_reason(record: dict[str, Any], role: str) -> str:

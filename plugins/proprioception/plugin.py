@@ -48,6 +48,7 @@ class ProprioceptionPlugin:
         fine_step_m: float = 0.02,
         coarse_step_m: Optional[float] = None,
         descend_stall_ratio: float = DESCEND_STALL_RATIO,
+        large_step_m: Optional[float] = None,
     ) -> None:
         self.enabled = bool(enabled)
         # X: above this height (m) above the table, tell the controller to descend first.
@@ -58,6 +59,7 @@ class ProprioceptionPlugin:
         # variable-step plugin is off, i.e. every step is fine).
         self.fine_step_m = max(0.0, float(fine_step_m))
         self.coarse_step_m = None if coarse_step_m is None else max(0.0, float(coarse_step_m))
+        self.large_step_m = None if large_step_m is None else float(large_step_m)
         # A MV_DOWN that travelled below this fraction of what was commanded is reported
         # as stalled (see DESCEND_STALL_RATIO).
         self.descend_stall_ratio = float(descend_stall_ratio)
@@ -67,6 +69,13 @@ class ProprioceptionPlugin:
         fine_cm = f"{self.fine_step_m * 100.0:g}"
         if self.coarse_step_m is None or self.coarse_step_m <= self.fine_step_m:
             return _fragment("step_sizes_fine").replace("{fine_cm}", fine_cm)
+        if self.large_step_m is not None and self.large_step_m > self.coarse_step_m:
+            return (
+                _fragment("step_sizes_three")
+                .replace("{fine_cm}", fine_cm)
+                .replace("{coarse_cm}", f"{self.coarse_step_m * 100.0:g}")
+                .replace("{large_cm}", f"{self.large_step_m * 100.0:g}")
+            )
         return (
             _fragment("step_sizes_coarse")
             .replace("{fine_cm}", fine_cm)
@@ -78,12 +87,15 @@ class ProprioceptionPlugin:
         proprio: Optional[Mapping[str, Any]],
         table_height_m: Optional[float],
         holding: bool = False,
+        stage: Optional[str] = None,
     ) -> str:
         """Return the proprio prompt block, or ``""`` when disabled / data unavailable.
 
         ``holding`` makes the soft hint phase-aware: when reaching for an object a larger
         gap means "descend", but once an object is held the same gap is desirable clearance
         for lifting/carrying -- the old always-"descend" hint actively fought the lift.
+        ``stage`` also suppresses movement hints during RELEASE/RETREAT and restricts
+        the open-gripper descent hint to approach/placement; None keeps legacy behavior.
         """
         if not self.enabled or not proprio or table_height_m is None:
             return ""
@@ -96,12 +108,17 @@ class ProprioceptionPlugin:
         except (TypeError, ValueError):
             return ""
         gap_cm = (eef_z - table) * 100.0
-        if holding:
+        phase = str(stage or "").strip().upper()
+        if phase in ("RELEASE", "RETREAT"):
+            hint = ""
+        elif holding:
             hint = _fragment("hint_holding")
-        else:
+        elif not phase or phase in ("GRASP", "PLACE"):
             hint = _fragment("hint_descend").replace(
                 "{high_cm}", f"{self.high_above_table_m * 100.0:.0f}"
             )
+        else:
+            hint = ""
         block = (
             _fragment("block")
             .replace("{gap_cm}", f"{gap_cm:.1f}")
