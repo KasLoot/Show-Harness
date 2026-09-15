@@ -103,7 +103,7 @@ class MujocoRecorder:
         bar = 32
         canvas = Image.new("RGB", (2 * size, 2 * (size + bar)), (19, 25, 35))
         draw = ImageDraw.Draw(canvas)
-        for i, (name, title) in enumerate(zip(CAMERAS, ("SIDE CAMERA", "WRIST CAMERA", "FRONT CAMERA"))):
+        for i, (name, title) in enumerate(zip(CAMERAS, ("ANGLED SIDE CAMERA", "WRIST CAMERA", "ANGLED FRONT CAMERA"))):
             x, y = (i % 2) * size, (i // 2) * (size + bar)
             canvas.paste(Image.fromarray(frames[name]), (x, y + bar))
             draw.text((x + 12, y + 7), title, font=self.title_font, fill=(218, 230, 240))

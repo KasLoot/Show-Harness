@@ -38,12 +38,15 @@ class MujocoTests(unittest.TestCase):
         with TemporaryDirectory() as directory, \
                 patch("core.sim.mujoco_session.MujocoSession.render", side_effect=frames.__getitem__), \
                 patch("scripts.run_mujoco.make_vlm_client", return_value=client) as factory, \
-                patch.dict(os.environ, {"OLLAMA_API_KEY": "test-key"}):
+                patch.dict(os.environ, {"GEMINI_API_KEY": "test-key", "OLLAMA_API_KEY": "test-key"}):
             config_path = Path(directory) / "config.yaml"
             config_path.write_text(yaml.safe_dump(cfg))
             self.assertEqual(main(["--robot-config", str(config_path), "--log-dir", directory,
                                    "--model", "test-model:cloud"]), 1)
             self.assertEqual(factory.call_args.args[1]["vlm"]["model"], "test-model:cloud")
+            self.assertEqual(factory.call_args.args[1]["vlm_backend"], "gemini")
+            self.assertEqual(factory.call_args.args[1]["vlm"]["provider"], "gemini")
+            self.assertEqual(factory.call_args.args[1]["vlm"]["api_key"], "test-key")
             self.assertEqual(client.complete_json.call_count, 2)
             for call in client.complete_json.call_args_list:
                 np.testing.assert_array_equal(call.args[1], frames["side"])
@@ -51,13 +54,51 @@ class MujocoTests(unittest.TestCase):
                 for sent, name in zip(call.kwargs["wrist_image"], ("wrist", "front")):
                     np.testing.assert_array_equal(sent, frames[name])
                 self.assertNotIn("AgentView", call.args[0])
-                self.assertIn("screen-right is MV_FWD", call.args[0])
+                self.assertIn("A and C mix height and table-plane depth", call.args[0])
+            controller_prompt = client.complete_json.call_args_list[-1].args[0]
+            self.assertIn("24.0 cm above the table", controller_prompt)
+            self.assertIn("down-right in A, down-left in C", controller_prompt)
+            self.assertNotIn("MV_DOWN first", controller_prompt)
             run = next(Path(directory).rglob("steps.jsonl")).parent
             self.assertEqual({p.name for p in (run / "images").iterdir()}, set(frames))
             for name, frame in frames.items():
                 np.testing.assert_array_equal(np.asarray(Image.open(run / "images" / name / "0000.png")), frame)
             np.testing.assert_array_equal(np.asarray(Image.open(run / "planner_front.png")), frames["front"])
             self.assertFalse(list(run.rglob("*.mp4")))
+
+    def test_angled_camera_directions_match_physical_moves(self):
+        from core.config import load_yaml
+        from core.sim.mujoco_session import MujocoSession
+        from scripts.run_mujoco import make_controller
+
+        cfg = load_yaml(ROOT / "configs/robot_mujoco.yaml")
+        session = MujocoSession(cfg)
+        self.addCleanup(session.close)
+        controller = make_controller(session, cfg)
+
+        def project(name, point):
+            camera = session.data.camera(name)
+            local = camera.xmat.reshape(3, 3).T @ (point - camera.xpos)
+            return np.array([local[0], -local[1]]) / -local[2]
+
+        for name in ("side", "front"):
+            self.assertEqual(session.model.cam_projection[session.model.camera(name).id],
+                             session.model.cam_projection[session.model.camera("wrist").id])
+        self.assertEqual(session.table_height_m, 0.0)
+        self.assertEqual(controller.z_floor_m, 0.025)
+        for token, inverse, signs in (
+            ("MV_FWD", "MV_BACK", {"side": (1, 1), "front": (-1, 1)}),
+            ("MV_RIGHT", "MV_LEFT", {"side": (1, -1), "front": (1, 1)}),
+            ("MV_UP", "MV_DOWN", {"side": (0, -1), "front": (0, -1)}),
+        ):
+            before = {name: project(name, session.get_ee_pose()[:3]) for name in signs}
+            controller.step(token)
+            for name, expected in signs.items():
+                delta = project(name, session.get_ee_pose()[:3]) - before[name]
+                for value, sign in zip(delta, expected):
+                    if sign:
+                        self.assertGreater(value * sign, 0, f"{token} in {name}")
+            controller.step(inverse)
 
     def test_all_three_step_sizes_physically_move_the_requested_distance(self):
         from core.config import load_yaml
@@ -187,7 +228,7 @@ class MujocoTests(unittest.TestCase):
         with TemporaryDirectory() as directory, patch("mujoco.Renderer") as renderer, \
                 patch("scripts.run_mujoco.make_vlm_client", return_value=client), \
                 patch("scripts.run_mujoco.make_controller", side_effect=build_controller), \
-                patch.dict(os.environ, {"OLLAMA_API_KEY": "test-key"}):
+                patch.dict(os.environ, {"GEMINI_API_KEY": "test-key", "OLLAMA_API_KEY": "test-key"}):
             renderer.return_value.render.return_value = np.zeros((128, 128, 3), np.uint8)
             config_path = Path(directory) / "config.yaml"
             for i, (enabled, visible, height, token, distance) in enumerate(cases):
@@ -200,7 +241,8 @@ class MujocoTests(unittest.TestCase):
                     client.reset_mock()
                     client.complete_json.return_value = VLMResponse("", json.dumps(answer), {"json": answer})
                     output = Path(directory) / f"case_{i}"
-                    args = ["--robot-config", str(config_path), "--log-dir", str(output)]
+                    args = ["--robot-config", str(config_path), "--log-dir", str(output),
+                            "--vlm-backend", "ollama"]
                     if enabled:
                         args.append("--variable-step")
                     if i == 2:
@@ -257,7 +299,7 @@ class MujocoTests(unittest.TestCase):
         client.complete_json.return_value = VLMResponse("", json.dumps(answer), {"json": answer})
         with TemporaryDirectory() as directory, patch("mujoco.Renderer") as renderer, \
                 patch("scripts.run_mujoco.make_vlm_client", return_value=client), \
-                patch.dict(os.environ, {"OLLAMA_API_KEY": "test-key"}):
+                patch.dict(os.environ, {"GEMINI_API_KEY": "test-key", "OLLAMA_API_KEY": "test-key"}):
             renderer.return_value.render.return_value = np.zeros((128, 128, 3), np.uint8)
             config_path = Path(directory) / "config.yaml"
             config_path.write_text(yaml.safe_dump(cfg))

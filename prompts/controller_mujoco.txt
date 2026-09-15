@@ -17,9 +17,12 @@ For GRASP, MOVE, or PLACE, if TARGET is inside Wrist, use Wrist for table-plane 
 - Once roughly centered in both axes, descend with MV_DOWN and refine from the closer view.
 {rotation}
 Otherwise use BOTH external views to compare TARGET with the end effector, or with the held object:
-- In Side (A), TARGET to its right -> MV_FWD; to its left -> MV_BACK.
-- In Front (C), TARGET to its right -> MV_RIGHT; to its left -> MV_LEFT.
-- Screen-up/down in Side and Front indicates HEIGHT, not forward/back travel.
+- Approximate GRIPPER motion in these perspective views around the workspace:
+  MV_FWD: down-right in A, down-left in C. MV_BACK reverses these directions.
+  MV_RIGHT: up-right in A, down-right in C. MV_LEFT reverses these directions.
+  MV_UP: mostly up in both. MV_DOWN: mostly down in both.
+- Horizontal travel also changes vertical image position; use both views to separate depth from height.
+- Being above TARGET means alignment in the table plane plus positive vertical clearance.
 - Align horizontally before descending. Do not infer a hidden axis from one external view.
 MV_UP to lift, gain travel clearance, or retreat after RELEASE.
 

@@ -13,11 +13,12 @@ Each integration keeps the deployment contracts: the same nine-token action
 vocabulary, the same image transforms (`core/record/images.py`), and measured
 per-config step calibration so one token means ~2 cm of physical travel.
 
-## MuJoCo + Ollama Cloud
+## MuJoCo + cloud models
 
 Run the zero-shot planner/controller with a Franka Panda in a local MuJoCo
-pick-and-place scene. The default model is `glm-5.3-flash:cloud` at
-`https://ollama.com/api`. No local model server, model weights, GPU, or robot
+pick-and-place scene. The default model is `gemini-3.5-flash-lite`, using the existing
+Gemini API provider. Ollama Cloud remains available with `--vlm-backend ollama`.
+No local model server, model weights, GPU, or robot
 hardware is required. The initial scene contains a red cube and a blue target pad.
 The shared hardware imports may print a `pyrealsense2` warning; MuJoCo does not use it.
 
@@ -26,8 +27,7 @@ The shared hardware imports may print a `pyrealsense2` warning; MuJoCo does not 
 bash scripts/setup.sh mujoco
 
 # Use an existing exported key, or add this line to gitignored configs/secrets.env:
-# OLLAMA_API_KEY="your-key"
-# Keys: https://ollama.com/settings/keys
+# GEMINI_API_KEY="your-key"
 
 # Check all six 2 cm moves, empty-grasp recovery, three cameras, and recording (no API calls).
 uv run --no-project python scripts/run_mujoco.py --smoke-test --record
@@ -36,6 +36,8 @@ uv run --no-project python scripts/run_mujoco.py --smoke-test --record
 uv run --no-project python scripts/run_mujoco.py
 # Add --record to save videos and their annotated timeline.
 uv run --no-project python scripts/run_mujoco.py --record
+# Use the existing Ollama profile instead (requires OLLAMA_API_KEY):
+uv run --no-project python scripts/run_mujoco.py --vlm-backend ollama --model glm-5.3-flash:cloud
 
 # Interactive MuJoCo viewport on macOS (mjpython is required for the viewer).
 .venv/bin/mjpython scripts/run_mujoco.py --gui
@@ -43,14 +45,38 @@ uv run --no-project python scripts/run_mujoco.py --record
 # uv run --no-project python scripts/run_mujoco.py --gui
 ```
 
+If macOS `mjpython` fails at `otool` with exit status 69, run
+`otool -l .venv/bin/python` to see the underlying error. When the selected Xcode
+installation reports an unaccepted license and `/Library/Developer/CommandLineTools`
+is installed, select those tools for this run:
+
+```bash
+DEVELOPER_DIR=/Library/Developer/CommandLineTools \
+  uv run --no-project mjpython scripts/run_mujoco.py --gui --variable-step --record
+```
+
+This selects the developer tools only for that process; the system-wide Xcode
+selection is unchanged.
+
 Linux without a display may need `MUJOCO_GL=egl` (EGL drivers) or
 `MUJOCO_GL=osmesa` (Mesa) before launching. Offscreen rendering on macOS uses
 the native graphics session; `MUJOCO_GL=egl` is not a macOS setting.
 
 Configuration: [`configs/robot_mujoco.yaml`](../configs/robot_mujoco.yaml).
-`--model`, `--vlm-url`, `--max-steps`, and `--log-dir` override it for one run.
-`OLLAMA_MODEL` and `OLLAMA_BASE_URL` are also supported. The model must accept
-images. The provider uses native `/api/chat` with bearer authentication, ordered
+`--vlm-backend` selects a profile; `--model`, `--vlm-url`, `--max-steps`, and
+`--log-dir` override it for one run. Set `vlm_backends.gemini.model` or
+`GEMINI_MODEL` to change the Gemini model; the Ollama profile uses
+`vlm_backends.ollama.model`, `OLLAMA_MODEL`, and `OLLAMA_BASE_URL`.
+The selected backend determines the endpoint and API key, so `--model` alone
+does not switch providers. The model must accept images.
+
+Gemini uses Google's [OpenAI-compatible endpoint](https://ai.google.dev/gemini-api/docs/openai)
+with JSON output, `GEMINI_API_KEY`, and low reasoning effort. Gemini 3 calls use
+the backend's configured temperature (1.0), including planner/controller calls
+that otherwise request zero, following
+[Google's temperature guidance](https://ai.google.dev/gemini-api/docs/gemini-3#temperature).
+
+Ollama uses native `/api/chat` with bearer authentication, ordered
 base64 camera images, and non-streaming replies. Ollama Cloud currently does not
 support structured output constraints, so the harness supplies the JSON contract
 in the prompt and validates action tokens locally. `reasoning_effort: low` keeps
@@ -73,16 +99,21 @@ Physics pauses during cloud calls, making motion independent of network latency.
 `observation_context` and `prompts/controller_mujoco.txt` describe the three cameras
 and their action directions to the model; update them when changing camera geometry.
 The planner and controller both receive separate images in this order: Side (A),
-Wrist (B), Front (C). The side/front views are level orthographic views centered on
-the manipulation workspace, with a 0.56 m vertical span. They show X/Z and Y/Z,
-respectively; screen-up/down is height in these views. Wrist remains the primary
-guide for fine alignment across the table. Side/front `pos`, `xyaxes`, and `fovy`
-are set in `assets/mujoco/pick_place.xml`; for these orthographic cameras, a smaller
-`fovy` zooms in. The old AgentView and oblique global cameras have been removed.
+Wrist (B), Front (C). The side/front views are perspective views centered on
+the manipulation workspace, looking down approximately 34 degrees from different
+sides, with a 34-degree vertical field of view. Table-plane travel and vertical
+height both affect vertical image position. The controller prompt describes the
+calibrated diagonal motion directions for each view. Wrist remains the primary
+guide for fine horizontal alignment. "Above the target" means alignment in the table
+plane with positive vertical clearance, rather than alignment in a single image.
+Side/front `pos`, `xyaxes`, and `fovy` are set in `assets/mujoco/pick_place.xml`;
+a smaller `fovy` zooms in. The old AgentView and separate global cameras have been removed.
+Proprioception uses the scene's actual tabletop height, independently of the
+2.5 cm TCP safety floor. Descent hints require rough horizontal alignment first.
 The scene requires MuJoCo 3.5+ for the
 [`projection` camera attribute](https://mujoco.readthedocs.io/en/3.8.0/changelog.html#version-3-5-0-february-12-2026).
 
-Rollouts are written under `rollouts/mujoco/ollama/`, including camera observations,
+Rollouts are written under `rollouts/mujoco/<backend>/` (`gemini` or `ollama`), including camera observations,
 prompts, actions, metadata with credentials redacted, a summary, and videos.
 Success requires the cube to rest on the pad, the fingers to be open, and
 the gripper to have retreated; a model's `DONE` alone is insufficient. The physical
@@ -142,9 +173,9 @@ Recording is disabled by default. Add `--record` (also with `--gui` or
 
 | File | Content |
 | --- | --- |
-| `side.mp4` | Close level side view of the manipulation workspace |
+| `side.mp4` | Close angled side view of the manipulation workspace |
 | `wrist.mp4` | Gripper-mounted camera |
-| `front.mp4` | Close level front view of the manipulation workspace |
+| `front.mp4` | Close angled front view of the manipulation workspace |
 | `combined.mp4` | Side / Wrist above, Front / VLM output and decision below |
 | `annotations.jsonl` | Timestamped decisions, full VLM output, execution, recovery, and results |
 

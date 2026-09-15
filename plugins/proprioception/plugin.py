@@ -51,7 +51,7 @@ class ProprioceptionPlugin:
         large_step_m: Optional[float] = None,
     ) -> None:
         self.enabled = bool(enabled)
-        # X: above this height (m) above the table, tell the controller to descend first.
+        # Above this height, suggest descending once horizontal alignment is established.
         # Configurable via robot_franka.yaml (high_above_table_m); shared with the variable-step plugin.
         self.high_above_table_m = max(0.0, float(high_above_table_m))
         # Per-step move distances surfaced to the VLM so it can gauge how far each move goes.

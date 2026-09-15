@@ -153,11 +153,11 @@ The full walkthroughs are in [docs/franka.md](docs/franka.md) and
 [docs/piper.md](docs/piper.md); simulators in
 [docs/simulators.md](docs/simulators.md).
 
-To run entirely in **MuJoCo with Ollama Cloud** (`glm-5.3-flash:cloud`):
+To run entirely in **MuJoCo with Gemini** (`gemini-3.5-flash-lite`):
 
 ```bash
 bash scripts/setup.sh mujoco
-# Set OLLAMA_API_KEY in your shell or configs/secrets.env.
+# Set GEMINI_API_KEY in your shell or configs/secrets.env.
 uv run --no-project python scripts/run_mujoco.py
 # macOS viewport: .venv/bin/mjpython scripts/run_mujoco.py --gui
 ```
@@ -165,10 +165,11 @@ uv run --no-project python scripts/run_mujoco.py
 The VLM receives Side, Wrist, and Front views. Add `--record` to save these three
 synchronized camera videos, a four-panel video with VLM
 decisions, and an annotated log. Add `--variable-step` for automatic 2 cm / 5 cm / 10 cm
-movements; without it, steps stay at 2 cm. Both flags are off by default. See [MuJoCo + Ollama setup](docs/simulators.md#mujoco--ollama-cloud)
+movements; without it, steps stay at 2 cm. Both flags are off by default. See [MuJoCo setup](docs/simulators.md#mujoco--cloud-models)
 for the offline smoke test, configuration, and recording options.
-Change `vlm_backends.ollama.model` in `configs/robot_mujoco.yaml`, set `OLLAMA_MODEL`,
+Change `vlm_backends.gemini.model` in `configs/robot_mujoco.yaml`, set `GEMINI_MODEL`,
 or pass `--model MODEL_NAME` for one run (the CLI override takes precedence).
+Use `--vlm-backend ollama` to select the existing Ollama profile and `OLLAMA_API_KEY`.
 
 ### 4. Repository layout
 

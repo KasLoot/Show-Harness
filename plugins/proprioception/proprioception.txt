@@ -14,7 +14,7 @@ each step moves ~{fine_cm} cm ({coarse_cm} cm)
 fine steps move ~{fine_cm} cm, coarse steps ~{coarse_cm} cm, and large steps ~{large_cm} cm
 
 [hint_descend]
-If height > {high_cm} cm, MV_DOWN first.
+If height > {high_cm} cm, descend with MV_DOWN only after rough horizontal alignment; re-check after each step.
 
 [hint_holding]
 Holding an object: lift until clear of the table; descend only to place.

@@ -891,10 +891,12 @@ def make_runner(
         empty_width_m=recovery_empty_width_m(cfg),
         open_width_m=recovery_open_width_m(cfg),
     )
-    # Controller plugins. Proprioception needs the table height (the Z-floor when set, else
-    # the calibrated table-contact constant); the Z-floor SAFETY limit is enforced inside
-    # the controller regardless of this tool.
-    table_height_m = controller.z_floor_m if controller.z_floor_m is not None else TABLE_CONTACT_Z_M
+    # Use the simulator's tabletop height when available. Hardware retains its
+    # calibrated contact reference; the controller's safety floor is independent.
+    table_height_m = getattr(
+        session, "table_height_m",
+        controller.z_floor_m if controller.z_floor_m is not None else TABLE_CONTACT_Z_M,
+    )
     # action_chunk (runner-level decision cadence): repeat a move step_num times while the
     # TARGET is far. Shared with the controller agent so the WRIST marker is rendered/parsed
     # whenever this OR variable_step is enabled.

@@ -36,6 +36,8 @@ class MujocoSession:
         ET.SubElement(hand, "camera", name="wrist", pos="0 0 0.055",
                       xyaxes="0 -1 0 -1 0 0", fovy="80")
         self.model = mujoco.MjModel.from_xml_string(ET.tostring(panda, encoding="unicode"))
+        table = self.model.geom("table")
+        self.table_height_m = float(table.pos[2] + table.size[2])
         self.data = mujoco.MjData(self.model)
         self._ik = mujoco.MjData(self.model)
         self.robot = self

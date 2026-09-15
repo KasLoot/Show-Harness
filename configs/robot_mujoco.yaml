@@ -10,12 +10,13 @@ recording:
 use_wrist_image: true
 gripper_color: black
 observation_context: |
-  Three simultaneous images: A is the level Side camera, B is the wrist camera
-  looking straight down, and C is the level Front camera.
-  In Side (A), screen-right is MV_FWD and screen-left is MV_BACK.
-  In Front (C), screen-right is MV_RIGHT and screen-left is MV_LEFT.
-  In BOTH external views, screen-up/down is vertical height (MV_UP/MV_DOWN),
-  not travel across the table. Use both views to resolve occlusion and depth.
+  Three simultaneous images: A is the angled Side camera, B is the wrist camera
+  looking straight down, and C is the angled Front camera. A and C are perspective
+  views looking down approximately 34 degrees from different sides of the workspace.
+  A and C mix height and table-plane depth in their vertical image positions.
+  Gripper ABOVE the target means its grasp point is aligned with the target in the
+  table plane (X/Y), with greater height (Z). Judge horizontal alignment and vertical
+  clearance separately; appearing underneath the gripper in one image is insufficient.
   In Image B, the grasp point is the exact image center, halfway between the black fingertips.
   Center the object in BOTH image axes: below center means MV_FWD, above center means
   MV_BACK, left means MV_LEFT, and right means MV_RIGHT. Image-down is horizontal
@@ -25,6 +26,7 @@ observation_context: |
   Before choosing a movement, check DONE WHEN. Emit DONE as soon as the current stage
   is satisfied so the next stage can start. GRASP on an already CLOSED gripper and
   RELEASE on an already OPEN gripper have no effect; do not repeat them.
+  Proprioception reports the grasp point's height above the tabletop.
 fine_step_m: 0.02
 coarse_step_m: 0.05 # Used only with --variable-step.
 large_step_m: 0.10 # Long travel only with enough table clearance; never visible-target XY alignment.
@@ -46,11 +48,21 @@ v0:
   max_subgoal_steps: 40
   max_replans: 1
   video_fps: 2
-vlm_backend: ollama
+vlm_backend: gemini
 vlm:
   timeout_s: 120
   temperature: 0.0
 vlm_backends:
+  gemini:
+    provider: gemini
+    base_url: https://generativelanguage.googleapis.com/v1beta/openai
+    model: gemini-3.5-flash-lite
+    model_env: GEMINI_MODEL
+    api_key_env: GEMINI_API_KEY
+    temperature: 1.0 # Recommended for Gemini 3; low temperatures can cause loops.
+    max_tokens: 8192
+    reasoning_effort: low
+    reasoning_cot: false
   ollama:
     provider: ollama
     base_url: https://ollama.com/api

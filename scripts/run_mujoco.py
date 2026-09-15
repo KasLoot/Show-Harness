@@ -52,7 +52,8 @@ def make_controller(session, cfg, *, variable_step=False):
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--robot-config", default=str(ROOT / "configs/robot_mujoco.yaml"))
-    parser.add_argument("--model", help="Override the configured Ollama model")
+    parser.add_argument("--vlm-backend", help="Select a vlm_backends profile (gemini or ollama)")
+    parser.add_argument("--model", help="Override the selected backend's model")
     parser.add_argument("--vlm-url", help="Override the configured API base URL")
     parser.add_argument("--max-steps", type=int)
     parser.add_argument("--log-dir")
@@ -70,13 +71,14 @@ def main(argv=None) -> int:
             cfg[key] = getattr(args, key)
     if int(cfg["max_steps"]) <= 0:
         parser.error("--max-steps must be positive")
-    cfg["vlm"] = resolve_vlm_config(cfg)
+    cfg["vlm"] = resolve_vlm_config(cfg, backend=args.vlm_backend)
+    cfg["vlm_backend"] = cfg["vlm"]["backend"]
     if args.model:
         cfg["vlm"]["model"] = args.model
     if args.vlm_url:
         cfg["vlm"]["base_url"] = args.vlm_url
     if not args.smoke_test and cfg["vlm"]["api_key"] == "EMPTY":
-        parser.error("Set OLLAMA_API_KEY in your environment or configs/secrets.env")
+        parser.error(f"Set {cfg['vlm'].get('api_key_env', 'VLLM_API_KEY')} in your environment or configs/secrets.env")
     session = MujocoSession(cfg, gui=args.gui)
     client = None
     try:
@@ -121,7 +123,7 @@ def main(argv=None) -> int:
             return 0
         client = make_vlm_client(args, cfg)
         client.health_check()
-        logger = EpisodeLogger(cfg["log_dir"], task_id=0, variant="ollama",
+        logger = EpisodeLogger(cfg["log_dir"], task_id=0, variant=cfg["vlm_backend"],
                                video_fps=cfg.get("v0", {}).get("video_fps", 2),
                                record_video=False, primary_camera="side")
         logger.write_metadata({"config": cfg, "simulator": "mujoco", "recording_enabled": args.record})

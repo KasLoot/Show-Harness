@@ -201,6 +201,10 @@ class VLMClient:
             if "max_tokens" in payload:
                 out["max_tokens"] = payload["max_tokens"]
             temperature = payload.get("temperature")
+            # Generic roles request zero; Gemini 3 should use the backend's tuned
+            # temperature (recommended 1.0) for planner, controller, and retries.
+            if self.model.startswith("gemini-3"):
+                temperature = self.temperature
             if temperature is not None:
                 out["temperature"] = float(temperature)
         # reasoning_effort applies to thinking models on both hosted providers; forward it

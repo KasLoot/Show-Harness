@@ -38,9 +38,11 @@ class VariableStepTests(unittest.TestCase):
             for holding in (True, False):
                 text = plugin.render(proprio, 0.025, holding=holding, stage=stage)
                 self.assertIn("15.0 cm above the table", text)
-                self.assertNotIn("MV_DOWN first", text)
+                self.assertNotIn("descend with MV_DOWN", text)
                 self.assertNotIn("lift until", text)
-        self.assertIn("MV_DOWN first", plugin.render(proprio, 0.025, stage="GRASP"))
+        grasp = plugin.render(proprio, 0.025, stage="GRASP")
+        self.assertIn("only after rough horizontal alignment", grasp)
+        self.assertNotIn("MV_DOWN first", grasp)
 
     def test_height_does_not_override_horizontal_alignment(self):
         plugin = VariableStepPlugin(enabled=True)
