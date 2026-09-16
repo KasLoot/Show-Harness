@@ -153,6 +153,11 @@ The full walkthroughs are in [docs/franka.md](docs/franka.md) and
 [docs/piper.md](docs/piper.md); simulators in
 [docs/simulators.md](docs/simulators.md).
 
+For **MuJoCo + Gemini 3.8 Flash**, with no robot hardware, follow the
+[MuJoCo quick start](docs/mujoco.md). It ports RoboLab's original cube-in-bowl
+scene and runs the original zero-shot harness using `GEMINI_API_KEY`:
+`.venv/bin/python -u scripts/run_mujoco.py --gui`.
+
 ### 4. Repository layout
 
 | Path | What it is |
@@ -279,4 +284,3 @@ If you find Show-Harness useful, please cite:
 If you like the project, please give us a star ⭐ — it is how we hear that it is useful.
 
 <a href="https://star-history.com/#showlab/Show-Harness&Date"><img alt="Star History Chart" src="https://api.star-history.com/svg?repos=showlab/Show-Harness&type=Date"></a>
-

@@ -1,0 +1,28 @@
+{
+  "source_study": "20260915T181152Z-side-camera",
+  "source_trial": 2,
+  "source_request": 14,
+  "note": "Exact unannotated request images and prompt; copied without modifications. Summary covers all three studies.",
+  "files": {
+    "summary_20260915.json": {
+      "sha256": "ecb19dfd90d8935c22641c732aad195a26284a0fb0d7005d607b2a2e95992366",
+      "bytes": 2709
+    },
+    "example_front.png": {
+      "sha256": "0e167e34b8402ec46a34de995d68b0e4fa8959c60f185a6331ad40e3f1986f5b",
+      "bytes": 23836
+    },
+    "example_wrist.png": {
+      "sha256": "07fde5ac6391e4ec8e9a948ab85cba0d7ca483ea1cb41a6ce061b3ebf3b98faa",
+      "bytes": 13505
+    },
+    "example_side.png": {
+      "sha256": "079983c728257f57c9629cbbcfde0c5da16ca98974a41167c79c8a8f9641be32",
+      "bytes": 20489
+    },
+    "example_prompt.txt": {
+      "sha256": "19cd2ab952c95bc30ef1c185fe0cad160d2ff6fae138cdb05aae9838f0e7837a",
+      "bytes": 2576
+    }
+  }
+}

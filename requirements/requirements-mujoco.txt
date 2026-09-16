@@ -1,0 +1,7 @@
+# CPU physics and offscreen/interactive rendering for scripts/run_mujoco.py.
+-r requirements.txt
+mujoco>=3.3,<4
+# Offline conversion of the original RoboLab USD meshes (no Isaac installation).
+usd-core>=25.5
+trimesh>=4.6
+coacd>=1.0.7

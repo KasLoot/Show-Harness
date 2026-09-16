@@ -1,0 +1,48 @@
+# Original RoboLab RubiksCubeTask + original Show-Harness zero-shot harness.
+# Hardware/site identity is replaced by the MuJoCo session; the policy is reused.
+harness_config: configs/robot_franka.yaml
+camera_config: configs/robot_robolab.yaml
+task_class: RubiksCubeTask
+task_source: models/mujoco/robolab/robolab/tasks/benchmark/rubiks_cube_task.py
+asset_dir: models/mujoco/rubiks_cube_bowl
+hardware: franka
+max_steps: 150
+log_dir: rollouts/mujoco_robolab
+physics_timestep_s: 0.002
+control_tick_s: 0.04
+initial_settle_s: 2.0
+gripper_duration_s: 1.0
+evaluation_settle_s: 2.0
+workspace_min: [0.15, -0.40, 0.135]
+workspace_max: [0.80, 0.40, 0.70]
+# EE frame is panda_hand, matching the original RoboLab robot and the measured
+# 132.3 mm flange-to-tip reach, rather than the old prototype's tip-centered TCP.
+z_floor_m: 0.135
+enable_z_floor: true
+gripper_color: yellow
+smooth_dt_s: 0.0   # advance the simulation clock at each waypoint; no wall-clock sleep
+robot:
+  settle_steps: 20
+  settle_dt_s: 0.0
+  gripper_settle_s: 0.0   # the simulated gripper call advances physics synchronously
+  gripper_min_settle_s: 0.0
+plugins:
+  # All other policy plugins inherit configs/robot_franka.yaml.
+  dagger: false
+  coords: false
+  affordance: false
+  video_ref: false
+vlm_backend: gemini
+vlm_backends:
+  gemini:
+    provider: gemini
+    base_url: https://generativelanguage.googleapis.com/v1beta/openai
+    model: gemini-3.8-flash
+    api_key_env: GEMINI_API_KEY
+    reasoning_cot: true
+    reasoning_effort: medium
+    max_tokens: 2048
+    max_retries: 2
+v0:
+  video_fps: 5
+  controller_prompt_log_every: 1

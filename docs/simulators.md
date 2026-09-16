@@ -1,6 +1,6 @@
 # Simulators
 
-Show-Harness integrates two simulators. They serve two roles:
+Show-Harness integrates MuJoCo, ManiSkill and RoboLab (Isaac Lab). They serve two roles:
 
 1. **Zero-shot evaluation** — run the deployment pipelines (the subgoal planner
    stack or the fine-tuned action model, see `docs/finetuned.md`) in sim
@@ -12,6 +12,24 @@ Show-Harness integrates two simulators. They serve two roles:
 Each integration keeps the deployment contracts: the same nine-token action
 vocabulary, the same image transforms (`core/record/images.py`), and measured
 per-config step calibration so one token means ~2 cm of physical travel.
+
+## MuJoCo + Gemini
+
+The MuJoCo backend ports the original RoboLab **RubiksCubeTask** scene and uses
+Show-Harness's existing zero-shot planner, controller and Franka interpreter with
+`gemini-3.8-flash`. It supplies unannotated camera images and robot proprioception;
+simulator task state is used only for independent scoring after an episode.
+
+```bash
+bash scripts/setup.sh mujoco
+.venv/bin/python scripts/run_mujoco.py --no-vlm --probe-axes
+.venv/bin/python -u scripts/run_mujoco.py --gui
+```
+
+See [the MuJoCo guide](mujoco.md) for source provenance, asset conversion,
+configuration, repeated evaluation, and differences from Isaac/PhysX. The scene
+uses the original textured cube, red bowl, table and yellow fingertip assembly.
+The orange-block/coaster task described below belongs to the ManiSkill integration.
 
 ## ManiSkill
 

@@ -7,6 +7,7 @@ set -euo pipefail
 #   bash scripts/setup.sh base           # .venv        the harness
 #   bash scripts/setup.sh base --real    #              + Franka/Piper hardware layer
 #   bash scripts/setup.sh serve          # .venv-vllm   serve a VLM locally
+#   bash scripts/setup.sh mujoco         # .venv        MuJoCo + original RoboLab assets
 #
 # Two venvs because their pins conflict: serving holds transformers where the harness does
 # not want it. Start with `base`; driving a robot against an already-served VLM needs
@@ -97,13 +98,26 @@ Fetch weights, then serve:
 EOF
 }
 
+setup_mujoco() {
+  require_uv
+  if [ ! -x "${VENV}/bin/python" ]; then
+    uv venv --python "${PYTHON_VERSION}" "${VENV}"
+  fi
+  uv pip install --python "${VENV}/bin/python" \
+      -r "${REPO_ROOT}/requirements/requirements-mujoco.txt"
+  "${VENV}/bin/python" "${REPO_ROOT}/scripts/mujoco/download_assets.py"
+  OMP_NUM_THREADS=2 "${VENV}/bin/python" "${REPO_ROOT}/scripts/mujoco/prepare_assets.py"
+  echo "Ready: ${VENV}/bin/python scripts/run_mujoco.py --no-vlm --probe-axes"
+}
+
 case "${1:-}" in
   ""|-h|--help)  [ "${1:-}" = "" ] && status || usage ;;
   base)   shift; setup_base "$@" ;;
+  mujoco) shift; setup_mujoco "$@" ;;
   serve)  shift; [ $# -gt 0 ] && { echo "serve takes no options" >&2; exit 1; }; setup_serve ;;
   train)  echo "Training setup lives with the training code:" >&2
           echo "  bash train/scripts/setup_llamafactory.sh              # qwen3_5 / internvl3_5" >&2
           echo "  bash train/scripts/setup_llamafactory.sh --gemma4     # add this to also train gemma4" >&2
           exit 1 ;;
-  *) echo "unknown target: $1 (base / serve)" >&2; exit 1 ;;
+  *) echo "unknown target: $1 (base / serve / mujoco)" >&2; exit 1 ;;
 esac
