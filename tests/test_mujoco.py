@@ -51,7 +51,9 @@ def test_original_task_and_zero_shot_harness(cfg):
 def test_source_objects_and_home_pose(task):
     assert task.provenance["source_revision"] == "ad45d4f974725d020f82c2b0d77d78533aeba2b3"
     np.testing.assert_allclose(task.data.body("bowl").xpos, [0.442576, 0.126594, 0.03034], atol=0.001)
-    np.testing.assert_allclose(task.data.body("rubiks_cube").xpos, [0.430675, -0.097464, 0.034096], atol=0.001)
+    # The resized cube settles lower, with the authored horizontal position retained.
+    np.testing.assert_allclose(task.data.body("rubiks_cube").xpos[:2], [0.430675, -0.097464], atol=0.001)
+    assert max(task.provenance["runtime_overrides"]["cube"]["dimensions_m"]) == pytest.approx(.04)
     np.testing.assert_allclose(task.ee_pose[:3], [0.3065, 0, 0.4367], atol=0.001)
     assert float(task.model.body("bowl").mass[0]) == pytest.approx(0.5)
     assert float(task.model.body("rubiks_cube").mass[0]) == pytest.approx(0.2)
@@ -131,7 +133,8 @@ def test_original_fingers_hold_cube_and_bowl_collision_is_hollow(task, cfg):
         for _ in range(count):
             controller.step(token, step_override_m=0.02)
         if token == "GRASP":
-            assert 0.05 < task.gripper_width < 0.065
+            assert 0.035 < task.gripper_width < 0.045
+            np.testing.assert_allclose(task.data.actuator_force[task.finger_actuators], [-80, -80], atol=4)
         if token == "MV_UP":
             assert evaluate_task(task)["cube_center_world"][2] > 0.12
         assert not evaluate_task(task)["success"]

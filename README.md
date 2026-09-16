@@ -157,6 +157,9 @@ For **MuJoCo + Gemini 3.8 Flash**, with no robot hardware, follow the
 [MuJoCo quick start](docs/mujoco.md). It ports RoboLab's original cube-in-bowl
 scene and runs the original zero-shot harness using `GEMINI_API_KEY`:
 `.venv/bin/python -u scripts/run_mujoco.py --gui`.
+The current profile uses a 40 mm cube, stronger grip control, continuous motion
+video, and pose/joint logging with [smooth endpoint-based playback](docs/mujoco.md#endpoint-playback-default).
+Playback plans a new trajectory at a specified tool speed, independently of live inference timing.
 
 ### 4. Repository layout
 

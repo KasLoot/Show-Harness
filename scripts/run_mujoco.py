@@ -29,6 +29,10 @@ def parse_args(argv=None):
     parser.add_argument("--no-vlm", action="store_true", help="Check physics/cameras without API calls.")
     parser.add_argument("--probe-axes", action="store_true")
     parser.add_argument("--debug", action="store_true")
+    parser.add_argument("--cube-size", type=float, help="Cube maximum side length in metres (default 0.04).")
+    parser.add_argument("--grip-force", type=float, help="Closing force in newtons per finger (default 80).")
+    parser.add_argument("--video-fps", type=float, help="Continuous simulation video frame rate (default 30).")
+    parser.add_argument("--video-layout", choices=["front", "multiview"], help="Video layout; VLM input views are unaffected")
     parser.add_argument("--extra-view", choices=["side"],
                         help="Camera-only variant: append one fixed side image to every VLM request.")
     parser.add_argument("--describe-side-camera", action="store_true",
@@ -53,6 +57,14 @@ def resolve_config(args):
     for key in ("defaults", "overlays", "robot", "poses", "z_floors"):
         original.pop(key, None)
     cfg = deep_merge(deep_merge(DEFAULTS, original), overrides)
+    if args.cube_size is not None:
+        cfg["cube_size_m"] = args.cube_size
+    if args.grip_force is not None:
+        cfg["gripper_control"]["close_force_n"] = args.grip_force
+    if args.video_fps is not None:
+        cfg["recording"]["fps"] = args.video_fps
+    if args.video_layout is not None:
+        cfg["recording"]["layout"] = args.video_layout
     if args.extra_view == "side":
         from core.sim.mujoco_ablation import side_camera_spec
         cfg["observer_cameras"] = [side_camera_spec()]
@@ -97,6 +109,7 @@ def make_controller(task, cfg):
     controller = original_make_controller(cfg, load_yaml(ROOT / "configs/primitives_franka.yaml"),
                                           session, args, hardware="franka")
     controller.sync_from_robot()
+    task.bind_controller(controller)
     return session, controller
 
 
@@ -119,6 +132,26 @@ def record_runtime_failure(task, logger, cfg, error):
     return evaluation
 
 
+def finalize_motion_recording(logger, recorder, cfg, success, *, check_only=False):
+    """Preserve the legacy decision montage and publish the continuous video."""
+    if not logger._steps_file.closed:
+        logger.close(success=success, fps=cfg["v0"]["video_fps"])
+    if recorder is None:
+        return {}
+    if not recorder.closed:
+        for name in ("rollout_success.mp4", "rollout_failure.mp4"):
+            old = logger.run_dir / name
+            if old.exists():
+                old.replace(logger.run_dir / "decision_frames.mp4")
+        filename = "motion_check.mp4" if check_only else ("rollout_success.mp4" if success else "rollout_failure.mp4")
+        recorder.close(final_path=logger.run_dir / filename)
+    return {"video_path": str(recorder.video_path),
+            "decision_video_path": str(logger.run_dir / "decision_frames.mp4"),
+            "trajectory_manifest": str(logger.run_dir / "trajectory_manifest.json"),
+            "action_endpoints": str(logger.run_dir / "action_endpoints.jsonl"),
+            "video_clock": "simulation time; API waits omitted"}
+
+
 def run_episode(args, cfg, index, instrumentation=None):
     from core.action_units import MOVE_ATOMS
     from core.prompting.prompt_loader import load_prompt_dir
@@ -126,9 +159,12 @@ def run_episode(args, cfg, index, instrumentation=None):
     from core.record.episode_logger import EpisodeLogger
     from core.record.images import save_png
     from core.sim.mujoco_task import MujocoTask, evaluate_task
+    from core.sim.mujoco_recording import MujocoRecorder
+    from core.sim.mujoco_ablation import AblationInstrumentation
 
     task = MujocoTask(cfg, gui=args.gui)
-    logger = client = None
+    logger = client = recorder = None
+    audit = instrumentation
     try:
         session, controller = make_controller(task, cfg)
         logger = EpisodeLogger(cfg["log_dir"], task_id=index,
@@ -139,6 +175,9 @@ def run_episode(args, cfg, index, instrumentation=None):
                                "policy": "core.launch.make_runner / RealEpisodeRunner",
                                "observations": "unannotated RGB + robot proprioception"})
         print(f"[mujoco] {cfg['task_class']}: {cfg['task']}\n[mujoco] Logs: {logger.run_dir}", flush=True)
+        if args.no_vlm and cfg.get("recording", {}).get("enabled", True):
+            recorder = MujocoRecorder(task, logger.run_dir, cfg)
+            recorder.install_controller(controller)
         if args.probe_axes:
             measurements = {}
             for token in MOVE_ATOMS:
@@ -146,23 +185,31 @@ def run_episode(args, cfg, index, instrumentation=None):
                 measurements[token] = (result.post_pose[:3] - result.pre_pose[:3]).tolist()
                 print(f"[probe] {token}: {measurements[token]}", flush=True)
             logger.write_calibration(measurements)
-            task.close()
-            task = MujocoTask(cfg, gui=args.gui)
-            session, controller = make_controller(task, cfg)
+            if not args.no_vlm:
+                task.close()
+                task = MujocoTask(cfg, gui=args.gui)
+                session, controller = make_controller(task, cfg)
+        if recorder is None and cfg.get("recording", {}).get("enabled", True):
+            recorder = MujocoRecorder(task, logger.run_dir, cfg)
+            recorder.install_controller(controller)
         front, wrist = task.render()
         save_png(logger.run_dir / "initial_agentview.png", front)
         save_png(logger.run_dir / "initial_wrist.png", wrist)
         if args.no_vlm:
+            task.advance(0.2)
             for camera in cfg.get("observer_cameras", []):
                 save_png(logger.run_dir / f"initial_{camera['name']}.png",
                          task.render_observer(camera["name"]))
             logger.log_step(0, front, wrist, {"step_idx": 0, "task": cfg["task"], "mode": "physics_check"})
-            logger.write_summary({"mode": "physics_check", "evaluated": False})
-            logger.close(success=False, fps=cfg["v0"]["video_fps"])
-            return {"mode": "physics_check", "run_dir": str(logger.run_dir)}
+            result = {"mode": "physics_check", "evaluated": False, "run_dir": str(logger.run_dir)}
+            result.update(finalize_motion_recording(logger, recorder, cfg, False, check_only=True))
+            logger.write_summary(result)
+            return result
         client = make_vlm_client(args, cfg)
-        if instrumentation is not None:
-            session = instrumentation.install(task, session, controller, logger, client)
+        audit = audit or AblationInstrumentation(send_side=False)
+        session = audit.install(task, session, controller, logger, client)
+        if recorder is not None:
+            recorder.install_client(client)
         runner = make_runner(cfg, load_prompt_dir(ROOT / "prompts"), client, session,
                              controller, logger, args.debug)
         started = time.monotonic()
@@ -175,34 +222,52 @@ def run_episode(args, cfg, index, instrumentation=None):
         # The existing runner reports the VLM's conclusion. Label user-facing
         # artifacts by the independent score while preserving that conclusion.
         video = logger.run_dir / ("rollout_success.mp4" if evaluation["success"] else "rollout_failure.mp4")
-        old_video = Path(result.video_path)
-        if old_video.exists() and old_video != video:
-            old_video.replace(video)
+        if recorder is not None:
+            evaluation.update(finalize_motion_recording(logger, recorder, cfg, evaluation["success"]))
+        else:
+            old_video = Path(result.video_path)
+            if old_video.exists() and old_video != video:
+                old_video.replace(video)
         evaluation["model_result"]["video_path"] = str(video)
         evaluation["video_path"] = str(video)
         summary_path = logger.run_dir / "summary.json"
         summary = json.loads(summary_path.read_text())
         summary.update(success=evaluation["success"], model_declared_success=result.success,
                        control_mode="mujoco", video_path=str(video))
+        if recorder is not None:
+            summary.update({k: evaluation[k] for k in ("trajectory_manifest", "action_endpoints", "decision_video_path", "video_clock")})
         summary_path.write_text(json.dumps(summary, indent=2) + "\n")
         (logger.run_dir / "evaluation.json").write_text(json.dumps(evaluation, indent=2) + "\n")
         front, wrist = task.render()
         save_png(logger.run_dir / "final_agentview.png", front)
         save_png(logger.run_dir / "final_wrist.png", wrist)
         print(f"[mujoco] model_complete={result.success}; evaluated_success={evaluation['success']}", flush=True)
+        print(f"[mujoco] Continuous video: {video}", flush=True)
         return evaluation
     except Exception as exc:
         if logger is not None:
-            record_runtime_failure(task, logger, cfg, exc)
+            evaluation = record_runtime_failure(task, logger, cfg, exc)
+            if recorder is not None:
+                evaluation.update(finalize_motion_recording(logger, recorder, cfg, False))
+                (logger.run_dir / "evaluation.json").write_text(json.dumps(evaluation, indent=2) + "\n")
+                summary = json.loads((logger.run_dir / "summary.json").read_text())
+                summary.update({k: evaluation[k] for k in ("video_path", "trajectory_manifest", "action_endpoints", "decision_video_path", "video_clock")})
+                logger.write_summary(summary)
         raise
     finally:
-        if instrumentation is not None:
-            instrumentation.close()
-        if logger is not None and not logger._steps_file.closed:
-            logger.close(success=False, fps=cfg["v0"]["video_fps"])
-        if client is not None:
-            client.session.close()
-        task.close()
+        try:
+            if audit is not None:
+                audit.close()
+            try:
+                if logger is not None and not logger._steps_file.closed:
+                    logger.close(success=False, fps=cfg["v0"]["video_fps"])
+            finally:
+                if recorder is not None and not recorder.closed:
+                    finalize_motion_recording(logger, recorder, cfg, False, check_only=args.no_vlm)
+        finally:
+            if client is not None:
+                client.session.close()
+            task.close()
 
 
 def main(argv=None):

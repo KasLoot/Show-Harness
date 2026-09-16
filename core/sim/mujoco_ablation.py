@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import base64
 import copy
+from contextlib import nullcontext
 from datetime import datetime, timezone
 import hashlib
 import io
@@ -140,8 +141,10 @@ class AblationInstrumentation:
         self.request_dir.mkdir()
         self.events = (self.run_dir / "physics_states.jsonl").open("w")
         self.secret = str(client._api_key)
-        self.side = task.render_observer("ablation_side")
-        save_png(self.run_dir / "initial_side.png", self.side)
+        has_side = any(c["name"] == "ablation_side" for c in task.cfg.get("observer_cameras", []))
+        self.side = task.render_observer("ablation_side") if has_side else None
+        if self.side is not None:
+            save_png(self.run_dir / "initial_side.png", self.side)
         # A fixed model snapshot plus state vectors makes post-run diagnostics
         # reproducible; no geometric metric is evaluated in the control loop.
         from core.sim.mujoco_task import build_model_xml
@@ -245,9 +248,11 @@ class AblationInstrumentation:
             config = session.config
 
             def get_observation(self):
-                observation = session.get_observation()
-                instrumentation.side = task.render_observer("ablation_side")
-                return observation
+                with getattr(task, "lock", nullcontext()):
+                    observation = session.get_observation()
+                    if has_side:
+                        instrumentation.side = task.render_observer("ablation_side")
+                    return observation
 
         return Session()
 

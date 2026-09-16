@@ -43,7 +43,8 @@ def runtime_manifest():
         files.extend(p for p in (ROOT / base).rglob("*")
                      if p.is_file() and p.suffix in (".py", ".txt"))
     files.extend(ROOT / path for path in ["configs/robot_mujoco.yaml", "configs/robot_franka.yaml",
-                 "configs/robot_robolab.yaml", "configs/primitives_franka.yaml", "scripts/run_mujoco.py"])
+                 "configs/robot_robolab.yaml", "configs/primitives_franka.yaml", "scripts/run_mujoco.py",
+                 "scripts/replay_mujoco.py"])
     files.extend((ROOT / "scripts/mujoco").glob("*.py"))
     return {str(p.relative_to(ROOT)): hashlib.sha256(p.read_bytes()).hexdigest()
             for p in sorted(set(files))}

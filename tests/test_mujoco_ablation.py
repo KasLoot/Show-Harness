@@ -82,7 +82,8 @@ def test_side_grasp_check_changes_one_condition_and_no_other_payload_fields():
 def test_every_http_attempt_is_saved_without_policy_state_leak(send_side, describe_side, check_grasp, tmp_path, monkeypatch):
     image = np.full((4, 4, 3), 71, dtype=np.uint8)
     data = SimpleNamespace(qpos=np.zeros(3), qvel=np.zeros(3), ctrl=np.zeros(1), time=0.0)
-    task = SimpleNamespace(cfg={}, data=data, render_observer=lambda name: image.copy())
+    task = SimpleNamespace(cfg={"observer_cameras": [{"name": "ablation_side"}]},
+                           data=data, render_observer=lambda name: image.copy())
     monkeypatch.setattr("core.sim.mujoco_task.build_model_xml", lambda cfg: ("<mujoco/>", {}))
     observation = {"agentview": image, "wrist": image, "ee_pose": np.zeros(7), "gripper_width": .08}
     session = SimpleNamespace(robot=object(), config=object(), get_observation=lambda: observation)
