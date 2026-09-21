@@ -10,19 +10,30 @@ recording:
 use_wrist_image: true
 gripper_color: black
 observation_context: |
-  Three simultaneous images: A is the angled Side camera, B is the wrist camera
-  looking straight down, and C is the angled Front camera. A and C are perspective
-  views looking down approximately 34 degrees from different sides of the workspace.
-  A and C mix height and table-plane depth in their vertical image positions.
+  Three simultaneous images: A is the wrist camera looking straight down, B is Front,
+  and C is Right Side. Front is on the +X side and Right Side is on the +Y side.
+  Both external cameras are orthographic and tilted 30 degrees downward toward the table.
   Gripper ABOVE the target means its grasp point is aligned with the target in the
   table plane (X/Y), with greater height (Z). Judge horizontal alignment and vertical
   clearance separately; appearing underneath the gripper in one image is insufficient.
-  In Image B, the grasp point is the exact image center, halfway between the black fingertips.
+  In Image A, the grasp point is the exact image center, halfway between the black fingertips.
   Center the object in BOTH image axes: below center means MV_FWD, above center means
   MV_BACK, left means MV_LEFT, and right means MV_RIGHT. Image-down is horizontal
   travel across the table, not a command to lower the arm. Once the object is roughly
   centered in both axes, descend and refine alignment from the closer view; do not
   demand pixel-perfect centering before lowering with discrete movement steps.
+  Camera translation parallel to the Wrist image plane makes a stationary target shift
+  oppositely in the image. Motion along the Wrist line of sight mainly changes apparent size.
+  Use Front and Right Side to bring an object outside Wrist into view and to check height.
+  In Front, MV_FWD moves closer to the camera, MV_BACK farther away, MV_RIGHT
+  image-right, and MV_LEFT image-left. Front's horizontal position isolates Y alignment.
+  In Right Side, MV_FWD moves image-left, MV_BACK image-right, MV_RIGHT closer to the
+  camera, and MV_LEFT farther away. Right Side's horizontal position isolates X alignment.
+  MV_UP moves vertically upward, away from the table; MV_DOWN moves vertically downward,
+  toward the table. Depth and height can overlap visually; cross-check both external
+  views and Wrist. Orthographic depth does not change apparent size. Before GRASP,
+  inspect Wrist: the graspable part must be visible between the fingertips. Overlap
+  in one external view alone is insufficient.
   Before choosing a movement, check DONE WHEN. Emit DONE as soon as the current stage
   is satisfied so the next stage can start. GRASP on an already CLOSED gripper and
   RELEASE on an already OPEN gripper have no effect; do not repeat them.
@@ -48,15 +59,26 @@ v0:
   max_subgoal_steps: 40
   max_replans: 1
   video_fps: 2
-vlm_backend: gemini
+vlm_backend: openai
 vlm:
   timeout_s: 120
   temperature: 0.0
 vlm_backends:
+  openai:
+    provider: openai
+    base_url: https://api.openai.com/v1
+    model: gpt-5.6-sol
+    model_env: OPENAI_MODEL
+    api_key_env: OPENAI_API_KEY
+    max_tokens: 8192 # Includes internal reasoning and the final action/plan.
+    reasoning_effort: medium # none | low | medium | high | xhigh | max
+    reasoning_effort_env: OPENAI_REASONING_EFFORT
+    # API reasoning stays enabled; keep the existing JSON action response format.
+    reasoning_cot: false
   gemini:
     provider: gemini
     base_url: https://generativelanguage.googleapis.com/v1beta/openai
-    model: gemini-3.5-flash-lite
+    model: gemini-3.8-flash
     model_env: GEMINI_MODEL
     api_key_env: GEMINI_API_KEY
     temperature: 1.0 # Recommended for Gemini 3; low temperatures can cause loops.
@@ -67,7 +89,7 @@ vlm_backends:
     provider: ollama
     base_url: https://ollama.com/api
     base_url_env: OLLAMA_BASE_URL
-    model: gemma4:cloud
+    model: kimi-k3:cloud
     model_env: OLLAMA_MODEL
     api_key_env: OLLAMA_API_KEY
     max_tokens: 8192

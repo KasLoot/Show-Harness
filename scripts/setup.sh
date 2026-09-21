@@ -22,7 +22,12 @@ set -euo pipefail
 REPO_ROOT="${REPO_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 VENV="${SHOWHARNESS_VENV:-${REPO_ROOT}/.venv}"
 VLLM_VENV="${SHOWHARNESS_VLLM_VENV:-${REPO_ROOT}/.venv-vllm}"
-PYTHON_VERSION="${PYTHON_VERSION:-3.11}"
+if [ -z "${PYTHON_VERSION:-}" ]; then
+  PYTHON_VERSION=3.11
+  if [ -f "${REPO_ROOT}/.python-version" ]; then
+    read -r PYTHON_VERSION < "${REPO_ROOT}/.python-version"
+  fi
+fi
 
 usage() { sed -n '4,20p' "$0" | sed 's/^# \?//'; }
 

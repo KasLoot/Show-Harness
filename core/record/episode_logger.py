@@ -161,6 +161,8 @@ class EpisodeLogger:
         wrist: Optional[Any],
         record: dict[str, Any],
         extra_views: Optional[dict[str, np.ndarray]] = None,
+        wrist_depth_m: Optional[np.ndarray] = None,
+        wrist_depth_text: str = "",
     ) -> None:
         """``wrist`` is one frame (single-arm), or a [left, right] pair (dual-arm) --
         the pair is stored side by side and rendered as separate analysis panels."""
@@ -177,6 +179,12 @@ class EpisodeLogger:
             save_png(wrist_path, stored)
         for name, frame in (extra_views or {}).items():
             save_png(self.run_dir / "images" / name / f"{step_idx:04d}.png", frame)
+        if wrist_depth_m is not None:
+            depth_dir = self.run_dir / "depth" / "wrist"
+            depth_dir.mkdir(parents=True, exist_ok=True)
+            np.save(depth_dir / f"{step_idx:04d}.npy", wrist_depth_m, allow_pickle=False)
+            if wrist_depth_text:
+                (depth_dir / f"{step_idx:04d}.txt").write_text(wrist_depth_text, encoding="utf-8")
         self._logged_steps.add(int(step_idx))
         # steps.json keeps the full reasoning; steps.jsonl gets a reasoning-truncated copy.
         self._full_records.append(_jsonable(record))
@@ -265,8 +273,15 @@ class EpisodeLogger:
         t_offset = int(frame.get("t_offset", 0))
         src_step = step_idx + t_offset
         camera = entry.get("camera", "")
-        attr, note = self._CAMERA_SOURCES.get(camera, ("wrist_dir", "unknown camera"))
-        path = getattr(self, attr) / f"{src_step:04d}.png"
+        if camera in self._CAMERA_SOURCES:
+            attr, note = self._CAMERA_SOURCES[camera]
+            path = getattr(self, attr) / f"{src_step:04d}.png"
+        elif camera in ("front", "side", "wrist_insert", "wrist_depth"):
+            note = ""
+            path = self.run_dir / "images" / camera / f"{src_step:04d}.png"
+        else:
+            note = "unknown camera"
+            path = self.wrist_dir / f"{src_step:04d}.png"
         rel = path.relative_to(self.run_dir)
         label = "t" if t_offset == 0 else f"t{t_offset:+d}"
         digest = frame.get("sha1", "?")

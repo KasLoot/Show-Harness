@@ -1,0 +1,62 @@
+<mujoco model="show_harness_plug_insert">
+  <visual>
+    <global offwidth="640" offheight="640"/>
+    <headlight diffuse="0.15 0.15 0.15" ambient="0.3 0.3 0.3" specular="0.1 0.1 0.1"/>
+    <quality shadowsize="4096"/>
+  </visual>
+  <asset>
+    <texture type="skybox" builtin="gradient" rgb1="0.68 0.73 0.77" rgb2="0.4 0.45 0.5"
+             width="512" height="3072"/>
+  </asset>
+  <worldbody>
+    <light name="lab_task_light" pos="0.4 -0.5 1.8" dir="0 0 -1" diffuse="0.25 0.25 0.25"/>
+    <geom name="table" type="box" pos="0.35 0 -0.03" size="0.65 0.5 0.03"
+          material="lab_tabletop" friction="1 0.005 0.0001"/>
+    <!-- Approved axis-aligned views: Front on +X, Right Side on +Y, elevated 30 degrees.
+         Orthographic fovy is a 0.6 metre vertical span, not an angle. -->
+    <camera name="side" pos="0.46 1.0692304845413265 0.75"
+            xyaxes="-1 0 0 0 -0.5 0.8660254037844387"
+            projection="orthographic" fovy="0.6"/>
+    <camera name="front" pos="1.4992304845413265 0.03 0.75"
+            xyaxes="0 1 0 -0.5 0 0.8660254037844387"
+            projection="orthographic" fovy="0.6"/>
+
+    <!-- The stand supports the peg tip; its handle is accessible from both sides. -->
+    <body name="stand" pos="0.48 -0.10 0">
+      <geom name="stand_base" type="box" pos="0 0 0.006" size="0.045 0.04 0.006"
+            rgba="0.26 0.29 0.34 1"/>
+      <geom name="stand_pedestal" type="cylinder" pos="0 0 0.026" size="0.018 0.014"
+            rgba="0.45 0.48 0.52 1"/>
+    </body>
+    <body name="plug" pos="0.48 -0.10 0.106">
+      <freejoint name="plug_joint"/>
+      <!-- Stiff handle contact prevents gravity creep during many fine actions.
+           A four-timestep response also settles stably against the socket rim;
+           the plug remains free and is carried only by fingertip friction. -->
+      <geom name="plug_handle" type="box" size="0.024 0.016 0.016" mass="0.045"
+            rgba="0.95 0.32 0.05 1" condim="4" friction="1.2 0.01 0.0001"
+            priority="1" solref="0.008 1" solimp="0.99 0.999 0.0001"/>
+      <geom name="plug_peg" type="cylinder" pos="0 0 -0.041" size="0.010 0.025" mass="0.015"
+            rgba="0.74 0.78 0.84 1" condim="4" friction="0.5 0.005 0.0001"/>
+      <!-- Retain a visible handle orientation mark; the round pin has no yaw key. -->
+      <geom name="plug_axis_mark" type="box" pos="0 0 0.0161" size="0.021 0.002 0.0001"
+            mass="0" contype="0" conaffinity="0" rgba="0.12 0.13 0.15 1"/>
+      <site name="plug_grasp" pos="0 0 0" size="0.002" rgba="0 0 0 0"/>
+      <site name="plug_tip" pos="0 0 -0.066" size="0.002" rgba="0 0 0 0"/>
+      <site name="plug_top" pos="0 0 0.016" size="0.002" rgba="0 0 0 0"/>
+    </body>
+
+    <!-- A 26 mm cylindrical bore for the 20 mm pin, with 50 mm insertion depth.
+         add_round_socket() generates convex collision wedges around these sites;
+         a single ring mesh would incorrectly collide as a solid convex hull.
+         The blue top remains open; the inner wall and physical floor are black. -->
+    <body name="socket" pos="0.48 0.16 0">
+      <geom name="socket_floor" type="box" pos="0 0 0.0075" size="0.055 0.05 0.0075"
+            rgba="0.004 0.005 0.006 1"/>
+      <site name="socket_entry" type="cylinder" pos="0 0 0.065" size="0.013 0.001"
+            rgba="0 0 0 0"/>
+      <site name="socket_seat" type="cylinder" pos="0 0 0.015" size="0.013 0.001"
+            rgba="0 0 0 0"/>
+    </body>
+  </worldbody>
+</mujoco>

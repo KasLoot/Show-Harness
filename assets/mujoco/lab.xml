@@ -1,0 +1,164 @@
+<mujoco model="show_harness_lab">
+  <!-- Shared visual-only set dressing. The task scene retains its original
+       tabletop collision surface and all robot/object dynamics. Dimensions in m;
+       the task tabletop is z=0 and the lab floor is z=-0.78. -->
+  <asset>
+    <texture name="lab_floor_tiles" type="2d" builtin="checker"
+             rgb1="0.49 0.51 0.51" rgb2="0.46 0.48 0.48" width="512" height="512"/>
+    <material name="lab_floor" texture="lab_floor_tiles" texrepeat="1 1"
+              texuniform="true" reflectance="0.03" shininess="0.1"/>
+    <material name="lab_tabletop" rgba="0.66 0.665 0.64 1" specular="0.12" shininess="0.15"/>
+    <material name="lab_wall" rgba="0.77 0.79 0.78 1" specular="0.05"/>
+    <material name="lab_trim" rgba="0.35 0.39 0.39 1" specular="0.2"/>
+    <material name="lab_frame" rgba="0.27 0.31 0.32 1" specular="0.35" shininess="0.3"/>
+    <material name="lab_metal" rgba="0.55 0.58 0.58 1" specular="0.4" shininess="0.3"/>
+    <material name="lab_rubber" rgba="0.07 0.085 0.085 1" specular="0.02"/>
+    <material name="lab_cabinet" rgba="0.59 0.64 0.63 1" specular="0.15"/>
+    <material name="lab_instrument" rgba="0.73 0.75 0.72 1" specular="0.2"/>
+    <material name="lab_screen" rgba="0.025 0.055 0.055 1" specular="0.35"/>
+    <material name="lab_trace" rgba="0.36 0.68 0.51 1" emission="0.18"/>
+    <material name="lab_board" rgba="0.86 0.88 0.84 1" specular="0.08"/>
+    <material name="lab_glass" rgba="0.37 0.46 0.48 1" specular="0.4" shininess="0.5"/>
+    <material name="lab_storage" rgba="0.42 0.48 0.44 1" specular="0.08"/>
+  </asset>
+  <worldbody>
+    <!-- Broad room fill illuminates the walls without extra task-object shadows. -->
+    <light name="lab_room_key" directional="true" pos="1 1 2" dir="-1 -1 -0.35"
+           diffuse="0.35 0.35 0.35" ambient="0.15 0.15 0.15" castshadow="false"/>
+    <light name="lab_room_fill" directional="true" pos="-1 -1 2" dir="0.8 0.8 -0.3"
+           diffuse="0.15 0.15 0.15" ambient="0.08 0.08 0.08" castshadow="false"/>
+    <!-- Four square steel legs, a recessed apron, lower cross rails, and levelling
+         feet make the existing 1.3 x 1.0 m slab a freestanding robot worktable. -->
+    <body name="lab_worktable">
+      <geom name="lab_apron_front" type="box" pos="0.905 0 -0.11" size="0.025 0.435 0.05" material="lab_frame" contype="0" conaffinity="0" group="1" mass="0"/>
+      <geom name="lab_apron_back" type="box" pos="-0.205 0 -0.11" size="0.025 0.435 0.05" material="lab_frame" contype="0" conaffinity="0" group="1" mass="0"/>
+      <geom name="lab_apron_right" type="box" pos="0.35 0.41 -0.11" size="0.53 0.025 0.05" material="lab_frame" contype="0" conaffinity="0" group="1" mass="0"/>
+      <geom name="lab_apron_left" type="box" pos="0.35 -0.41 -0.11" size="0.53 0.025 0.05" material="lab_frame" contype="0" conaffinity="0" group="1" mass="0"/>
+      <geom name="lab_leg_front_right" type="box" pos="0.88 0.41 -0.405" size="0.032 0.032 0.345" material="lab_metal" contype="0" conaffinity="0" group="1" mass="0"/>
+      <geom name="lab_leg_front_left" type="box" pos="0.88 -0.41 -0.405" size="0.032 0.032 0.345" material="lab_metal" contype="0" conaffinity="0" group="1" mass="0"/>
+      <geom name="lab_leg_back_right" type="box" pos="-0.18 0.41 -0.405" size="0.032 0.032 0.345" material="lab_metal" contype="0" conaffinity="0" group="1" mass="0"/>
+      <geom name="lab_leg_back_left" type="box" pos="-0.18 -0.41 -0.405" size="0.032 0.032 0.345" material="lab_metal" contype="0" conaffinity="0" group="1" mass="0"/>
+      <geom name="lab_foot_front_right" type="cylinder" pos="0.88 0.41 -0.765" size="0.041 0.015" material="lab_rubber" contype="0" conaffinity="0" group="1" mass="0"/>
+      <geom name="lab_foot_front_left" type="cylinder" pos="0.88 -0.41 -0.765" size="0.041 0.015" material="lab_rubber" contype="0" conaffinity="0" group="1" mass="0"/>
+      <geom name="lab_foot_back_right" type="cylinder" pos="-0.18 0.41 -0.765" size="0.041 0.015" material="lab_rubber" contype="0" conaffinity="0" group="1" mass="0"/>
+      <geom name="lab_foot_back_left" type="cylinder" pos="-0.18 -0.41 -0.765" size="0.041 0.015" material="lab_rubber" contype="0" conaffinity="0" group="1" mass="0"/>
+      <geom name="lab_lower_rail_back" type="box" pos="-0.18 0 -0.59" size="0.025 0.39 0.025" material="lab_frame" contype="0" conaffinity="0" group="1" mass="0"/>
+      <geom name="lab_lower_rail_left" type="box" pos="0.35 -0.41 -0.59" size="0.51 0.025 0.025" material="lab_frame" contype="0" conaffinity="0" group="1" mass="0"/>
+      <geom name="lab_lower_rail_right" type="box" pos="0.35 0.41 -0.59" size="0.51 0.025 0.025" material="lab_frame" contype="0" conaffinity="0" group="1" mass="0"/>
+    </body>
+
+    <!-- An open-front room keeps all approved task cameras unobstructed. -->
+    <body name="lab_room">
+      <geom name="lab_floor_slab" type="box" pos="0.5 0 -0.81" size="2.5 2.5 0.03" material="lab_floor" contype="0" conaffinity="0" group="1" mass="0"/>
+      <geom name="lab_back_wall" type="box" pos="-2.03 0 0.72" size="0.03 2.5 1.5" material="lab_wall" contype="0" conaffinity="0" group="1" mass="0"/>
+      <geom name="lab_left_wall" type="box" pos="0.5 -2.53 0.72" size="2.5 0.03 1.5" material="lab_wall" contype="0" conaffinity="0" group="1" mass="0"/>
+      <geom name="lab_back_skirt" type="box" pos="-1.99 0 -0.71" size="0.012 2.5 0.07" material="lab_trim" contype="0" conaffinity="0" group="1" mass="0"/>
+      <geom name="lab_left_skirt" type="box" pos="0.5 -2.49 -0.71" size="2.5 0.012 0.07" material="lab_trim" contype="0" conaffinity="0" group="1" mass="0"/>
+      <!-- Interior observation window and its mullions. -->
+      <geom name="lab_window_frame" type="box" pos="-1.975 1.10 1.25" size="0.025 0.72 0.43" material="lab_trim" contype="0" conaffinity="0" group="1" mass="0"/>
+      <geom name="lab_window_glazing" type="box" pos="-1.946 1.10 1.25" size="0.005 0.685 0.395" material="lab_glass" contype="0" conaffinity="0" group="1" mass="0"/>
+      <geom name="lab_window_mullion" type="box" pos="-1.934 1.10 1.25" size="0.008 0.015 0.395" material="lab_trim" contype="0" conaffinity="0" group="1" mass="0"/>
+      <geom name="lab_window_transom" type="box" pos="-1.934 1.10 1.34" size="0.008 0.685 0.012" material="lab_trim" contype="0" conaffinity="0" group="1" mass="0"/>
+      <!-- Whiteboard with a restrained schematic, facing the front camera. -->
+      <geom name="lab_board_frame" type="box" pos="-1.975 -0.77 1.16" size="0.025 0.63 0.38" material="lab_metal" contype="0" conaffinity="0" group="1" mass="0"/>
+      <geom name="lab_board_surface" type="box" pos="-1.944 -0.77 1.16" size="0.005 0.605 0.355" material="lab_board" contype="0" conaffinity="0" group="1" mass="0"/>
+      <geom name="lab_board_title" type="box" pos="-1.936 -0.80 1.39" size="0.002 0.39 0.008" material="lab_trim" contype="0" conaffinity="0" group="1" mass="0"/>
+      <geom name="lab_board_diagram_a" type="box" pos="-1.935 -1.11 1.16" size="0.002 0.11 0.055" material="lab_storage" contype="0" conaffinity="0" group="1" mass="0"/>
+      <geom name="lab_board_diagram_b" type="box" pos="-1.935 -0.73 1.16" size="0.002 0.11 0.055" material="lab_storage" contype="0" conaffinity="0" group="1" mass="0"/>
+      <geom name="lab_board_diagram_c" type="box" pos="-1.935 -0.35 1.16" size="0.002 0.11 0.055" material="lab_storage" contype="0" conaffinity="0" group="1" mass="0"/>
+      <geom name="lab_board_diagram_link" type="box" pos="-1.934 -0.73 1.16" size="0.003 0.38 0.005" material="lab_trim" contype="0" conaffinity="0" group="1" mass="0"/>
+      <geom name="lab_board_note_a" type="box" pos="-1.936 -0.86 0.97" size="0.002 0.32 0.005" material="lab_trim" contype="0" conaffinity="0" group="1" mass="0"/>
+      <geom name="lab_board_note_b" type="box" pos="-1.936 -0.94 0.91" size="0.002 0.24 0.005" material="lab_trim" contype="0" conaffinity="0" group="1" mass="0"/>
+    </body>
+
+    <!-- Electronics bench behind the robot. Cabinet and instrument faces point +X. -->
+    <body name="lab_back_bench" pos="-1.56 0.10 0">
+      <geom name="lab_back_worktop" type="box" pos="0 0 0.04" size="0.36 1.62 0.035" material="lab_tabletop" contype="0" conaffinity="0" group="1" mass="0"/>
+      <geom name="lab_back_cabinet" type="box" pos="-0.025 0 -0.355" size="0.31 1.57 0.36" material="lab_cabinet" contype="0" conaffinity="0" group="1" mass="0"/>
+      <geom name="lab_back_plinth" type="box" pos="-0.04 0 -0.745" size="0.27 1.52 0.035" material="lab_trim" contype="0" conaffinity="0" group="1" mass="0"/>
+      <geom name="lab_back_door_1" type="box" pos="0.293 -1.18 -0.36" size="0.008 0.377 0.336" material="lab_instrument" contype="0" conaffinity="0" group="1" mass="0"/>
+      <geom name="lab_back_door_2" type="box" pos="0.293 -0.39 -0.36" size="0.008 0.377 0.336" material="lab_instrument" contype="0" conaffinity="0" group="1" mass="0"/>
+      <geom name="lab_back_door_3" type="box" pos="0.293 0.40 -0.36" size="0.008 0.377 0.336" material="lab_instrument" contype="0" conaffinity="0" group="1" mass="0"/>
+      <geom name="lab_back_door_4" type="box" pos="0.293 1.19 -0.36" size="0.008 0.367 0.336" material="lab_instrument" contype="0" conaffinity="0" group="1" mass="0"/>
+      <geom name="lab_back_handle_1" type="box" pos="0.314 -1.18 -0.12" size="0.012 0.09 0.008" material="lab_frame" contype="0" conaffinity="0" group="1" mass="0"/>
+      <geom name="lab_back_handle_2" type="box" pos="0.314 -0.39 -0.12" size="0.012 0.09 0.008" material="lab_frame" contype="0" conaffinity="0" group="1" mass="0"/>
+      <geom name="lab_back_handle_3" type="box" pos="0.314 0.40 -0.12" size="0.012 0.09 0.008" material="lab_frame" contype="0" conaffinity="0" group="1" mass="0"/>
+      <geom name="lab_back_handle_4" type="box" pos="0.314 1.19 -0.12" size="0.012 0.09 0.008" material="lab_frame" contype="0" conaffinity="0" group="1" mass="0"/>
+      <!-- Oscilloscope: dark screen, sampled trace, and a bank of control knobs. -->
+      <body name="lab_scope" pos="0.02 -0.64 0.23">
+        <geom name="lab_scope_case" type="box" size="0.15 0.25 0.155" material="lab_instrument" contype="0" conaffinity="0" group="1" mass="0"/>
+        <geom name="lab_scope_bezel" type="box" pos="0.152 -0.06 0.015" size="0.006 0.163 0.113" material="lab_trim" contype="0" conaffinity="0" group="1" mass="0"/>
+        <geom name="lab_scope_screen" type="box" pos="0.160 -0.06 0.015" size="0.003 0.148 0.098" material="lab_screen" contype="0" conaffinity="0" group="1" mass="0"/>
+        <geom name="lab_scope_trace_1" type="capsule" fromto="0.165 -0.198 0.015 0.165 -0.15 0.06" size="0.002" material="lab_trace" contype="0" conaffinity="0" group="1" mass="0"/>
+        <geom name="lab_scope_trace_2" type="capsule" fromto="0.165 -0.15 0.06 0.165 -0.10 0.015" size="0.002" material="lab_trace" contype="0" conaffinity="0" group="1" mass="0"/>
+        <geom name="lab_scope_trace_3" type="capsule" fromto="0.165 -0.10 0.015 0.165 -0.05 -0.03" size="0.002" material="lab_trace" contype="0" conaffinity="0" group="1" mass="0"/>
+        <geom name="lab_scope_trace_4" type="capsule" fromto="0.165 -0.05 -0.03 0.165 0 0.015" size="0.002" material="lab_trace" contype="0" conaffinity="0" group="1" mass="0"/>
+        <geom name="lab_scope_trace_5" type="capsule" fromto="0.165 0 0.015 0.165 0.047 0.06" size="0.002" material="lab_trace" contype="0" conaffinity="0" group="1" mass="0"/>
+        <geom name="lab_scope_trace_6" type="capsule" fromto="0.165 0.047 0.06 0.165 0.078 0.03" size="0.002" material="lab_trace" contype="0" conaffinity="0" group="1" mass="0"/>
+        <geom name="lab_scope_knob_1" type="cylinder" pos="0.166 0.16 0.08" quat="0.70710678 0 0.70710678 0" size="0.025 0.014" material="lab_frame" contype="0" conaffinity="0" group="1" mass="0"/>
+        <geom name="lab_scope_knob_2" type="cylinder" pos="0.166 0.16 0" quat="0.70710678 0 0.70710678 0" size="0.019 0.014" material="lab_frame" contype="0" conaffinity="0" group="1" mass="0"/>
+        <geom name="lab_scope_knob_3" type="cylinder" pos="0.166 0.16 -0.08" quat="0.70710678 0 0.70710678 0" size="0.019 0.014" material="lab_frame" contype="0" conaffinity="0" group="1" mass="0"/>
+      </body>
+      <body name="lab_power_supply" pos="0.025 0.05 0.20">
+        <geom name="lab_supply_case" type="box" size="0.145 0.16 0.125" material="lab_instrument" contype="0" conaffinity="0" group="1" mass="0"/>
+        <geom name="lab_supply_display" type="box" pos="0.149 0 0.055" size="0.004 0.115 0.035" material="lab_screen" contype="0" conaffinity="0" group="1" mass="0"/>
+        <geom name="lab_supply_readout_1" type="box" pos="0.155 -0.045 0.055" size="0.002 0.038 0.003" material="lab_trace" contype="0" conaffinity="0" group="1" mass="0"/>
+        <geom name="lab_supply_readout_2" type="box" pos="0.155 0.052 0.055" size="0.002 0.028 0.003" material="lab_trace" contype="0" conaffinity="0" group="1" mass="0"/>
+        <geom name="lab_supply_knob_1" type="cylinder" pos="0.158 -0.065 -0.04" quat="0.70710678 0 0.70710678 0" size="0.027 0.014" material="lab_frame" contype="0" conaffinity="0" group="1" mass="0"/>
+        <geom name="lab_supply_knob_2" type="cylinder" pos="0.158 0.065 -0.04" quat="0.70710678 0 0.70710678 0" size="0.027 0.014" material="lab_frame" contype="0" conaffinity="0" group="1" mass="0"/>
+      </body>
+      <geom name="lab_tool_tray" type="box" pos="0.06 0.65 0.095" size="0.18 0.25 0.02" material="lab_storage" contype="0" conaffinity="0" group="1" mass="0"/>
+      <geom name="lab_tray_insert" type="box" pos="0.06 0.65 0.117" size="0.155 0.225 0.005" material="lab_rubber" contype="0" conaffinity="0" group="1" mass="0"/>
+      <geom name="lab_sample_fixture" type="cylinder" pos="0.05 0.65 0.151" size="0.065 0.028" material="lab_metal" contype="0" conaffinity="0" group="1" mass="0"/>
+      <geom name="lab_storage_bin" type="box" pos="-0.02 1.26 0.19" size="0.23 0.22 0.115" material="lab_storage" contype="0" conaffinity="0" group="1" mass="0"/>
+      <geom name="lab_storage_label" type="box" pos="0.212 1.26 0.20" size="0.002 0.11 0.035" material="lab_board" contype="0" conaffinity="0" group="1" mass="0"/>
+    </body>
+
+    <!-- Side workstation with a monitor, keyboard and wall-mounted shelving. -->
+    <body name="lab_side_bench" pos="0.58 -2.08 0">
+      <geom name="lab_side_worktop" type="box" pos="0 0 0.04" size="1.04 0.34 0.035" material="lab_tabletop" contype="0" conaffinity="0" group="1" mass="0"/>
+      <geom name="lab_side_cabinet_left" type="box" pos="-0.72 -0.025 -0.35" size="0.26 0.29 0.355" material="lab_cabinet" contype="0" conaffinity="0" group="1" mass="0"/>
+      <geom name="lab_side_cabinet_right" type="box" pos="0.72 -0.025 -0.35" size="0.26 0.29 0.355" material="lab_cabinet" contype="0" conaffinity="0" group="1" mass="0"/>
+      <geom name="lab_side_plinth_left" type="box" pos="-0.72 -0.04 -0.744" size="0.24 0.26 0.036" material="lab_trim" contype="0" conaffinity="0" group="1" mass="0"/>
+      <geom name="lab_side_plinth_right" type="box" pos="0.72 -0.04 -0.744" size="0.24 0.26 0.036" material="lab_trim" contype="0" conaffinity="0" group="1" mass="0"/>
+      <geom name="lab_side_drawer_1" type="box" pos="-0.72 0.275 -0.11" size="0.24 0.008 0.095" material="lab_instrument" contype="0" conaffinity="0" group="1" mass="0"/>
+      <geom name="lab_side_drawer_2" type="box" pos="-0.72 0.275 -0.34" size="0.24 0.008 0.11" material="lab_instrument" contype="0" conaffinity="0" group="1" mass="0"/>
+      <geom name="lab_side_drawer_3" type="box" pos="-0.72 0.275 -0.58" size="0.24 0.008 0.11" material="lab_instrument" contype="0" conaffinity="0" group="1" mass="0"/>
+      <geom name="lab_side_drawer_handle_1" type="box" pos="-0.72 0.295 -0.10" size="0.08 0.012 0.008" material="lab_frame" contype="0" conaffinity="0" group="1" mass="0"/>
+      <geom name="lab_side_drawer_handle_2" type="box" pos="-0.72 0.295 -0.32" size="0.08 0.012 0.008" material="lab_frame" contype="0" conaffinity="0" group="1" mass="0"/>
+      <geom name="lab_side_drawer_handle_3" type="box" pos="-0.72 0.295 -0.55" size="0.08 0.012 0.008" material="lab_frame" contype="0" conaffinity="0" group="1" mass="0"/>
+      <geom name="lab_side_door" type="box" pos="0.72 0.275 -0.35" size="0.24 0.008 0.335" material="lab_instrument" contype="0" conaffinity="0" group="1" mass="0"/>
+      <geom name="lab_side_door_handle" type="box" pos="0.88 0.295 -0.16" size="0.008 0.012 0.08" material="lab_frame" contype="0" conaffinity="0" group="1" mass="0"/>
+      <geom name="lab_monitor_base" type="box" pos="-0.04 -0.09 0.086" size="0.13 0.10 0.011" material="lab_frame" contype="0" conaffinity="0" group="1" mass="0"/>
+      <geom name="lab_monitor_stem" type="box" pos="-0.04 -0.12 0.195" size="0.027 0.026 0.10" material="lab_frame" contype="0" conaffinity="0" group="1" mass="0"/>
+      <geom name="lab_monitor_case" type="box" pos="-0.04 -0.13 0.40" size="0.285 0.026 0.17" material="lab_frame" contype="0" conaffinity="0" group="1" mass="0"/>
+      <geom name="lab_monitor_screen" type="box" pos="-0.04 -0.10 0.40" size="0.264 0.003 0.149" material="lab_screen" contype="0" conaffinity="0" group="1" mass="0"/>
+      <geom name="lab_monitor_toolbar" type="box" pos="-0.04 -0.095 0.52" size="0.244 0.002 0.008" material="lab_storage" contype="0" conaffinity="0" group="1" mass="0"/>
+      <geom name="lab_monitor_plot_x" type="box" pos="-0.05 -0.095 0.31" size="0.19 0.002 0.002" material="lab_metal" contype="0" conaffinity="0" group="1" mass="0"/>
+      <geom name="lab_monitor_plot_y" type="box" pos="-0.24 -0.095 0.40" size="0.002 0.002 0.09" material="lab_metal" contype="0" conaffinity="0" group="1" mass="0"/>
+      <geom name="lab_monitor_curve_1" type="capsule" fromto="-0.23 -0.091 0.33 -0.12 -0.091 0.37" size="0.003" material="lab_trace" contype="0" conaffinity="0" group="1" mass="0"/>
+      <geom name="lab_monitor_curve_2" type="capsule" fromto="-0.12 -0.091 0.37 -0.03 -0.091 0.45" size="0.003" material="lab_trace" contype="0" conaffinity="0" group="1" mass="0"/>
+      <geom name="lab_monitor_curve_3" type="capsule" fromto="-0.03 -0.091 0.45 0.14 -0.091 0.46" size="0.003" material="lab_trace" contype="0" conaffinity="0" group="1" mass="0"/>
+      <geom name="lab_keyboard" type="box" pos="-0.04 0.18 0.089" size="0.21 0.072 0.014" material="lab_trim" contype="0" conaffinity="0" group="1" mass="0"/>
+      <geom name="lab_keyboard_keys" type="box" pos="-0.04 0.18 0.105" size="0.192 0.055 0.002" material="lab_metal" contype="0" conaffinity="0" group="1" mass="0"/>
+      <geom name="lab_mouse" type="ellipsoid" pos="0.28 0.17 0.092" size="0.028 0.045 0.018" material="lab_frame" contype="0" conaffinity="0" group="1" mass="0"/>
+      <geom name="lab_shelf_lower" type="box" pos="0 -0.225 0.79" size="1.01 0.18 0.022" material="lab_tabletop" contype="0" conaffinity="0" group="1" mass="0"/>
+      <geom name="lab_shelf_upper" type="box" pos="0 -0.225 1.27" size="1.01 0.18 0.022" material="lab_tabletop" contype="0" conaffinity="0" group="1" mass="0"/>
+      <geom name="lab_shelf_upright_left" type="box" pos="-0.90 -0.38 1.04" size="0.019 0.017 0.40" material="lab_frame" contype="0" conaffinity="0" group="1" mass="0"/>
+      <geom name="lab_shelf_upright_right" type="box" pos="0.90 -0.38 1.04" size="0.019 0.017 0.40" material="lab_frame" contype="0" conaffinity="0" group="1" mass="0"/>
+      <geom name="lab_shelf_bin_left" type="box" pos="-0.63 -0.21 0.924" size="0.21 0.14 0.112" material="lab_storage" contype="0" conaffinity="0" group="1" mass="0"/>
+      <geom name="lab_shelf_bin_label" type="box" pos="-0.63 -0.068 0.934" size="0.095 0.002 0.028" material="lab_board" contype="0" conaffinity="0" group="1" mass="0"/>
+      <geom name="lab_shelf_case_right" type="box" pos="0.52 -0.22 0.901" size="0.28 0.13 0.089" material="lab_instrument" contype="0" conaffinity="0" group="1" mass="0"/>
+      <geom name="lab_shelf_case_latch" type="box" pos="0.52 -0.088 0.917" size="0.045 0.004 0.013" material="lab_trim" contype="0" conaffinity="0" group="1" mass="0"/>
+      <geom name="lab_shelf_binder_1" type="box" pos="-0.70 -0.21 1.43" size="0.036 0.12 0.138" material="lab_storage" contype="0" conaffinity="0" group="1" mass="0"/>
+      <geom name="lab_shelf_binder_2" type="box" pos="-0.61 -0.21 1.43" size="0.036 0.12 0.138" material="lab_instrument" contype="0" conaffinity="0" group="1" mass="0"/>
+      <geom name="lab_shelf_binder_3" type="box" pos="-0.52 -0.21 1.43" size="0.036 0.12 0.138" material="lab_storage" contype="0" conaffinity="0" group="1" mass="0"/>
+      <geom name="lab_shelf_box_upper" type="box" pos="0.44 -0.21 1.397" size="0.25 0.14 0.105" material="lab_cabinet" contype="0" conaffinity="0" group="1" mass="0"/>
+    </body>
+
+    <!-- Recording/presentation only. Moved 1.6 m along the original sightline
+         toward the workspace, retaining the viewing angle and field of view. -->
+    <camera name="lab_overview" pos="1.458941090 1.269582380 0.917281879"
+            xyaxes="-0.738 0.674 0 -0.330 -0.361 0.872" fovy="58"/>
+  </worldbody>
+</mujoco>

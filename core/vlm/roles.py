@@ -4,6 +4,7 @@ import json
 from typing import Any, Sequence
 
 from core.prompting.wrist_marker import parse_wrist_marker, wrist_marker_prompt
+from core.visual_history import VisualHistoryEntry, compose_visual_history
 
 from .vlm_client import VLMParseError, VLMResponse, recover_allowed_token
 
@@ -365,6 +366,7 @@ class ControllerAgent:
         affordance_plugin: Any = None,
         action_ablation_plugin: Any = None,
         table_height_m: float | None = None,
+        cartesian_actions: Any = None,
     ) -> None:
         self.client = client
         self.prompt_template = prompt_template
@@ -407,8 +409,10 @@ class ControllerAgent:
         # filter_final so run-time text obeys the setting.
         self.action_ablation_plugin = action_ablation_plugin
         self.table_height_m = table_height_m
+        self.cartesian_actions = cartesian_actions
         # The most recent fully-rendered controller prompt, for periodic logging.
         self.last_prompt = ""
+        self.last_prompt_media: list[dict] = []
 
     def _active_protocol(self) -> Any:
         """The active answer-protocol tool (ablation letters > mcq > None)."""
@@ -446,6 +450,10 @@ class ControllerAgent:
         proprio: dict[str, Any] | None = None,
         recovery_context: str = "",
         debug: bool = False,
+        visual_history: Sequence[VisualHistoryEntry] = (),
+        current_step_idx: int | None = None,
+        current_view_names: Sequence[str] | None = None,
+        current_depth_text: str = "",
     ) -> VLMResponse:
         # Tools choose the prompt's context block and answer protocol. proprio (context
         # provider) is additive; mcq (answer protocol) is one-or-the-other with the default.
@@ -486,14 +494,16 @@ class ControllerAgent:
             allowed_tokens: Sequence[str] = list(mcq.answer_tokens)
             output_contract = mcq.output_contract()
         else:
-            rotation_tokens = (
+            extra_tokens = (
                 tuple(self.rotation_plugin.action_tokens())
                 if self.rotation_plugin is not None
                 else ()
             )
-            allowed_tokens = tuple(CONTROLLER_TOKENS) + rotation_tokens
+            if self.cartesian_actions is not None:
+                extra_tokens += tuple(self.cartesian_actions.action_tokens())
+            allowed_tokens = tuple(CONTROLLER_TOKENS) + extra_tokens
             output_contract = _default_output_contract(
-                rotation_tokens, include_wrist=self._wants_wrist() and not self.cot_mode,
+                extra_tokens, include_wrist=self._wants_wrist() and not self.cot_mode,
             )
 
         prompt = _join_prompt_parts(
@@ -525,6 +535,11 @@ class ControllerAgent:
                 gripper_proprio=gripper_proprio,
                 output_contract=output_contract,
             ),
+            (self.cartesian_actions.render_prompt(proprio)
+             if self.cartesian_actions is not None else ""),
+            (("CURRENT WRIST DEPTH"
+              + (f" (step {current_step_idx})" if current_step_idx is not None else "")
+              + ":\n" + current_depth_text) if current_depth_text else ""),
         )
         ablation = self.action_ablation_plugin
         ablation_on = ablation is not None and getattr(ablation, "enabled", False)
@@ -544,19 +559,49 @@ class ControllerAgent:
             # One funnel for the whole setting: symbolize/strip the assembled prompt
             # (covers run-time injections) and substitute the blind table/review.
             prompt = ablation.filter_final(prompt, review_symbol=review_symbol)
-        self.last_prompt = prompt
         if review_symbol is not None:
             # The review text promises the BEFORE frame as the LAST attached image.
             wrist_image = (list(wrist_image) if isinstance(wrist_image, (list, tuple))
                            else [wrist_image] if wrist_image is not None else []) + [
                 prev_agentview_image
             ]
+        # The runner passes named current frames and a bounded set of prior
+        # pre-action snapshots. Keep current images in their established slots;
+        # append explicitly labeled old images, never a conversation transcript.
+        extra_images = (list(wrist_image) if isinstance(wrist_image, (list, tuple))
+                        else [wrist_image] if wrist_image is not None else [])
+        images = ([agentview_image] if agentview_image is not None else [])
+        images += [image for image in extra_images if image is not None]
+        names = list(current_view_names) if current_view_names is not None else (
+            ["agentview", *["wrist" if i == 0 else f"extra_{i + 1}"
+                            for i in range(len(images) - 1)]] if images else []
+        )
+        if review_symbol is not None:
+            if visual_history:
+                raise ValueError("Visual history cannot be combined with blind action review")
+            # The blind ablation appends its own earlier frame outside normal views.
+            if len(names) < len(images):
+                names.append("agentview")
+        if len(names) != len(images):
+            raise ValueError("current_view_names must match the current non-empty images")
+        images, history_text, self.last_prompt_media = compose_visual_history(
+            list(zip(names, images)), visual_history, current_step_idx=current_step_idx,
+        )
+        if review_symbol is not None:
+            self.last_prompt_media[-1].update(t_offset=-1, temporal="before_action")
+        if visual_history:
+            agentview_image, wrist_image = images[0], images[1:]
+            prompt = _join_prompt_parts(prompt, history_text)
+        self.last_prompt = prompt
         # On a rare double parse failure, commit to the last movement direction
         # instead of crashing the episode (degraded-output safeguard, not control).
         # Under MCQ the fallback must be expressed in the answer alphabet (a letter).
         fallback_token = (
             previous_direction if previous_direction in DIRECTION_TOKENS else "MV_DOWN"
         )
+        if self.cartesian_actions is not None:
+            # A failed parse during insertion must not repeat a move into contact.
+            fallback_token = "STOP"
         if mcq is not None:
             fallback_token = mcq.fallback_answer(fallback_token)
 

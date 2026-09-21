@@ -10,18 +10,23 @@ Gripper now: {gripper_state}
 {proprio}
 
 DIRECTION:
-Images are ordered Side (A), Wrist (B), Front (C).
+Images are ordered Wrist (A), Front (B), Right Side (C).
 For GRASP, MOVE, or PLACE, if TARGET is inside Wrist, use Wrist for table-plane alignment:
 - TARGET left of the grasp point -> MV_LEFT; right -> MV_RIGHT.
 - TARGET below the grasp point -> MV_FWD; above -> MV_BACK.
+- These are hand movements: translation parallel to the Wrist image plane makes a stationary
+  target shift oppositely in the image. Motion along the Wrist line of sight mainly changes apparent size.
 - Once roughly centered in both axes, descend with MV_DOWN and refine from the closer view.
 {rotation}
-Otherwise use BOTH external views to compare TARGET with the end effector, or with the held object:
-- Approximate GRIPPER motion in these perspective views around the workspace:
-  MV_FWD: down-right in A, down-left in C. MV_BACK reverses these directions.
-  MV_RIGHT: up-right in A, down-right in C. MV_LEFT reverses these directions.
-  MV_UP: mostly up in both. MV_DOWN: mostly down in both.
-- Horizontal travel also changes vertical image position; use both views to separate depth from height.
+Otherwise use Front and Right Side to bring TARGET into Wrist, comparing it with the end effector or held object:
+- Both external cameras are orthographic, tilted 30 degrees downward toward the table.
+- Front (B), on the +X side: MV_FWD moves closer to the camera; MV_BACK moves farther away.
+  MV_RIGHT moves image-right; MV_LEFT moves image-left. Use horizontal alignment here to judge Y.
+- Right Side (C), on the +Y side: MV_FWD moves image-left; MV_BACK moves image-right.
+  MV_RIGHT moves closer to the camera; MV_LEFT moves farther away. Use horizontal alignment here to judge X.
+- MV_UP moves vertically upward, away from the table; MV_DOWN moves vertically downward, toward the table.
+- Depth and height can overlap visually in either external view; cross-check Front, Right Side, and Wrist.
+  Orthographic depth does not change apparent size. Image overlap alone does not establish alignment.
 - Being above TARGET means alignment in the table plane plus positive vertical clearance.
 - Align horizontally before descending. Do not infer a hidden axis from one external view.
 MV_UP to lift, gain travel clearance, or retreat after RELEASE.
@@ -34,7 +39,9 @@ ATTENTION:
 GRIPPER:
 {gripper_proprio}
 - GRASP when Wrist confirms the {affordance} is between the {gripper_color} fingertips
-  and Side/Front confirm the fingers have descended to the object.
+  and the external views confirm the fingers have descended to the object.
+- If the object is absent from Wrist or outside the gap between the fingertips,
+  correct the position before closing; do not infer a grasp from one external view's overlap.
 - RELEASE only when the held object is above its destination and lowered onto it.
 {variable_step}
 {action_chunk}

@@ -39,10 +39,13 @@ import core.ui.console as console
 from core.action_units import MOVE_ATOMS, ROTATE_ATOMS
 from interpreters.franka_atomic_controller import AtomicStepResult, FrankaAtomicController
 from core.runners.preemption import InterruptibleDecider
+from core.runners.motion_history import motion_history_effect
 from core.record.episode_logger import EpisodeLogger, status_flags
 from core.franka.franka_session import FrankaSession
-from core.record.images import save_png, to_uint8_hwc
+from core.record.images import save_png, to_uint8_hwc, vlm_camera_views
+from core.sim.mujoco_depth import depth_prompt
 from core.v0_types import EpisodeResult, SkillContext, Subgoal, V0Config
+from core.visual_history import VisualHistoryEntry
 from plugins.subgoal import SubgoalPlanner
 
 
@@ -85,6 +88,7 @@ class RealEpisodeRunner:
         dagger_plugin: Any = None,
         action_ablation_plugin: Any = None,
         recent_moves_max: int = RECENT_MOVES_MAX,
+        visual_history_steps: int = 0,
         viewer: Any = None,
     ) -> None:
         self.session = session
@@ -114,6 +118,9 @@ class RealEpisodeRunner:
         # (the marker for step N is only known after step N's decision).
         self._prev_target_in_wrist = False
         self.recent_moves_max = max(1, int(recent_moves_max))
+        self.visual_history_steps = int(visual_history_steps)
+        if self.visual_history_steps < 0:
+            raise ValueError("visual_history_steps must be nonnegative")
         self.viewer = viewer
         # DAGGER: real-time human keyboard override (plugins.dagger, single mode). Keys
         # arrive on the live view's stream thread; the runner consumes them at step
@@ -146,6 +153,10 @@ class RealEpisodeRunner:
         subgoals: list[Subgoal] = []
         raw_plan = ""
         recent_moves: list[str] = []
+        # Pre-action camera sets paired with what actually ran after each set.
+        # Keep across stage boundaries: the first insertion request needs to see
+        # the preceding alignment, not start with a blank visual memory.
+        visual_history: list[VisualHistoryEntry] = []
         current_direction: Optional[str] = None
         recovery_note = ""
         # Action-ablation blind review: the frame captured BEFORE the last executed
@@ -196,27 +207,39 @@ class RealEpisodeRunner:
                     except Exception:  # noqa: BLE001 - auditing must not break the run
                         pass
 
+                views = vlm_camera_views(obs, plan_agentview, live_wrist)
                 image_roles = [
-                    f"LIVE {obs.get('primary_camera', 'AgentView')}: current external scene and object positions."
+                    ("LIVE Wrist view: local gripper detail only; do not infer hidden global positions."
+                     if name == "Wrist" else
+                     "LIVE Angled Wrist: moving hand-mounted view of the pin, black bore and rim for insertion alignment."
+                     if name == "Angled Wrist" else
+                     "LIVE Wrist Depth: " + depth_prompt(obs["wrist_depth_calibration"])
+                     if name == "Wrist Depth" and "wrist_depth_calibration" in obs else
+                     f"LIVE {name}: current external scene and object positions.")
+                    for name, _ in views
                 ]
-                if live_wrist is not None:
-                    image_roles.append(
-                        "LIVE Wrist view: local gripper detail only; do not infer hidden global positions."
-                    )
+                if obs.get("primary_camera") == "Front":
+                    save_png(self.logger.run_dir / "planner_front.png", plan_agentview)
                 extra_views = obs.get("extra_views", {})
                 for name, frame in extra_views.items():
                     save_png(self.logger.run_dir / f"planner_{name}.png", frame)
-                    image_roles.append(f"LIVE {name.title()} view: complementary external scene and object positions.")
-                plan_images = live_wrist
-                if extra_views:
-                    plan_images = ([live_wrist] if live_wrist is not None else []) + list(extra_views.values())
+                depth_text = str(obs.get("wrist_depth_text") or "")
+                if depth_text:
+                    (self.logger.run_dir / "planner_wrist_depth.txt").write_text(depth_text, encoding="utf-8")
+                if "wrist_depth_m" in obs:
+                    np.save(self.logger.run_dir / "planner_wrist_depth_m.npy", obs["wrist_depth_m"], allow_pickle=False)
+                extra_images = [frame for _, frame in views[1:]]
+                plan_images = (extra_images[0] if len(extra_images) == 1 else extra_images or None)
 
                 subgoals, raw_plan = self.planner.plan(
                     self.task,
-                    plan_agentview,
+                    views[0][1],
                     wrist=plan_images,
                     debug=self.debug,
                     image_roles=image_roles,
+                    **({"observation_text": "CURRENT WRIST DEPTH (initial observation):\n"
+                        + depth_prompt(obs["wrist_depth_calibration"]) + "\n" + depth_text}
+                       if depth_text else {}),
                 )
                 if not subgoals:
                     raise RuntimeError("Planner returned no subgoals for the task")
@@ -304,6 +327,11 @@ class RealEpisodeRunner:
                     proprio=self._proprio(obs),
                     debug=self.debug,
                 )
+                history_views = tuple(
+                    (name, np.array(frame, copy=True))
+                    for name, frame in vlm_camera_views(obs, agentview, wrist)
+                ) if self.visual_history_steps else ()
+                history_depth_text = str(obs.get("wrist_depth_text") or "")
 
                 # DeepPlan: execution has reached a <REASON> checkpoint -- a conditional
                 # branch deferred at plan time. Resolve it from the LIVE scene and splice the
@@ -330,6 +358,7 @@ class RealEpisodeRunner:
                         subgoal_start_step = step_idx + 1
                         current_direction = None
                         recent_moves.clear()
+                        visual_history.clear()
                         chunk_queue = []
                         recovery_note = ""
                         self.logger.write_plan(self._deepplan_plan_record(decision, subgoals))
@@ -398,6 +427,8 @@ class RealEpisodeRunner:
                             else None
                         ),
                     )
+                    if self.visual_history_steps:
+                        decide_kwargs["visual_history"] = tuple(visual_history)
                     if self._dagger_enabled():
                         # Preemptible: the moment human keys arrive the call is
                         # abandoned (and its result later dropped); None means the
@@ -493,8 +524,9 @@ class RealEpisodeRunner:
                 )
                 if post_recovery is not None:
                     recovery_decision = post_recovery
+                recovery_release = None
                 if recovery_decision is not None and recovery_decision.release:
-                    self.controller.step(RELEASE_TOKEN)
+                    recovery_release = self.controller.step(RELEASE_TOKEN)
                 if recovery_decision is not None and recovery_decision.block_done:
                     subgoal_done = False
                 # A close that measurably HOLDS expires any lingering recovery note
@@ -519,11 +551,28 @@ class RealEpisodeRunner:
                     if getattr(recovery_decision, "grasp_empty", False) and self._at_z_floor(obs):
                         recovery_note += " (at Z floor; descent exhausted)"
 
+                if self.visual_history_steps:
+                    effect = motion_history_effect(result)
+                    action = str(getattr(result, "token", None) or token)
+                    if action != token:
+                        effect += f"; controller request {token} was mapped to executed {action}"
+                    if recovery_decision is not None:
+                        if recovery_decision.release:
+                            action += " then recovery RELEASE"
+                            effect += "; recovery RELEASE: " + motion_history_effect(recovery_release)
+                        if recovery_decision.prompt_note:
+                            effect += "; recovery feedback: " + str(recovery_decision.prompt_note)
+                    visual_history.append(VisualHistoryEntry(
+                        step_idx=step_idx, stage=subgoal.motion, views=history_views,
+                        action=action, effect=effect, depth_text=history_depth_text,
+                    ))
+                    del visual_history[:-self.visual_history_steps]
+
                 plan_complete = subgoal_done and (current_index + 1 >= len(subgoals))
                 if recovery_decision is not None and recovery_decision.reset_history:
                     current_direction = None
                     recent_moves.clear()
-                elif token in MOVE_ATOMS:
+                elif token in MOVE_ATOMS or getattr(result, "kind", "") == "move":
                     recent_moves.insert(0, token)
                     del recent_moves[self.recent_moves_max:]
                     current_direction = token
@@ -534,7 +583,7 @@ class RealEpisodeRunner:
                     recent_moves.insert(0, f"{token}(no-op)" if noop else token)
                     del recent_moves[self.recent_moves_max:]
                     current_direction = None
-                elif token in ROTATE_ATOMS:
+                elif token in ROTATE_ATOMS or getattr(result, "kind", "") == "rotate":
                     recent_moves.insert(0, token)
                     del recent_moves[self.recent_moves_max:]
                     current_direction = None
@@ -573,6 +622,9 @@ class RealEpisodeRunner:
                     recovery_decision=recovery_decision,
                     human_kind=human_kind,
                 )
+                diagnostics = self._success_diagnostics()
+                if diagnostics is not None:
+                    record["success_diagnostics"] = diagnostics
                 if recorder is not None:
                     recorder.end_step(record)
                 self._show_live(
@@ -606,6 +658,8 @@ class RealEpisodeRunner:
                     wrist=wrist,
                     record=record,
                     **({"extra_views": obs["extra_views"]} if obs.get("extra_views") else {}),
+                    **({"wrist_depth_m": obs["wrist_depth_m"], "wrist_depth_text": history_depth_text}
+                       if "wrist_depth_m" in obs else {}),
                 )
                 self._write_action_table(step_idx)
 
@@ -680,6 +734,8 @@ class RealEpisodeRunner:
                     "task": self.task,
                     "gripper_color": self.gripper_color,
                     "z_floor_m": self.controller.z_floor_m,
+                    **({"success_diagnostics": diagnostics}
+                       if (diagnostics := self._success_diagnostics()) is not None else {}),
                     "raw_plan": raw_plan,
                     "subgoals": [sg.to_prompt_dict() for sg in subgoals],
                     # Every affordance grounding of the episode (metadata.json, written
@@ -701,6 +757,11 @@ class RealEpisodeRunner:
         )
 
     # -- helpers -----------------------------------------------------------
+    def _success_diagnostics(self):
+        """Persist physical criteria for audits; never feed object state to the VLM."""
+        diagnostics = getattr(self.session, "success_diagnostics", None)
+        return diagnostics() if callable(diagnostics) else None
+
     def _single_task_subgoal(self) -> Subgoal:
         """The fallback "plan" when the subgoal tool is disabled: one stage covering the
         whole task, so the controller drives toward task completion and DONE ends it."""
@@ -770,6 +831,12 @@ class RealEpisodeRunner:
             "gripper_width": float(obs.get("gripper_width", 0.0)),
             "gripper_command_name": "CLOSED" if self.controller.gripper_closed else "OPEN",
         }
+        if ee_pose.size >= 7:
+            proprio["eef_quat"] = ee_pose[3:7].tolist()
+        if "insertion_camera_axes" in obs:
+            proprio["insertion_camera_axes"] = obs["insertion_camera_axes"]
+        if "wrist_depth_calibration" in obs:
+            proprio["wrist_depth_calibration"] = obs["wrist_depth_calibration"]
         if self._descend is not None:
             proprio["descend_moved_m"], proprio["descend_commanded_m"] = self._descend
         return proprio
@@ -926,7 +993,19 @@ class RealEpisodeRunner:
         step_kind = str(getattr(result, "step_kind", "") or "")
         if step_kind:
             record["step_kind"] = step_kind
-            record["step_cm"] = round(float(getattr(result, "step_m", 0.0)) * 100.0, 1)
+            if getattr(result, "kind", "") == "rotate":
+                record["rotation_deg"] = round(float(getattr(result, "rotation_deg", 0.0)), 3)
+                record["rotation_vector_rad"] = np.asarray(
+                    getattr(result, "intended_rotation_rad", [0, 0, 0]), dtype=float,
+                ).tolist()
+            else:
+                record["step_cm"] = round(float(getattr(result, "step_m", 0.0)) * 100.0, 3)
+        if getattr(self.controller, "cartesian_actions", None) is not None and result is not None:
+            # Preserve all six degrees of freedom in insertion rollouts.
+            for field in ("pre_pose", "target_pose", "post_pose"):
+                pose = getattr(result, field, None)
+                if pose is not None:
+                    record[field] = np.asarray(pose, dtype=float).tolist()
         response_payload = getattr(response, "payload", None) or {}
         if "target_in_wrist" in response_payload:
             record["target_in_wrist"] = response_payload["target_in_wrist"]
@@ -1052,7 +1131,9 @@ class RealEpisodeRunner:
         flags = []
         # Step precision first: it qualifies the action itself ("MV_FWD coarse 5 cm").
         if record.get("step_kind"):
-            flags.append(console.dim(f"{record['step_kind']} {record['step_cm']:g} cm"))
+            amount, unit = ((record["rotation_deg"], "deg") if "rotation_deg" in record
+                            else (record["step_cm"], "cm"))
+            flags.append(console.dim(f"{record['step_kind']} {amount:g} {unit}"))
         if record.get("done"):
             flags.append(console.c(console.GREEN, "stage done"))
         if record.get("grasp_fail"):
@@ -1145,7 +1226,7 @@ def descend_travel(
         return previous
     pre, post = getattr(result, "pre_pose", None), getattr(result, "post_pose", None)
     commanded = float(np.asarray(getattr(result, "intended_delta_m", [0, 0, 0]))[2])
-    if str(token).strip().upper() != "MV_DOWN" or pre is None or post is None or commanded >= 0:
+    if pre is None or post is None or commanded >= 0:
         return None
     travelled = float(np.asarray(pre, dtype=float)[2] - np.asarray(post, dtype=float)[2])
     return max(0.0, travelled), abs(commanded)

@@ -1,23 +1,25 @@
 <mujoco model="show_harness_pick_place">
   <visual>
     <global offwidth="640" offheight="640"/>
-    <headlight diffuse="0.3 0.3 0.3" ambient="0.2 0.2 0.2"/>
+    <headlight diffuse="0.15 0.15 0.15" ambient="0.3 0.3 0.3" specular="0.1 0.1 0.1"/>
+    <quality shadowsize="4096"/>
   </visual>
   <asset>
-    <texture type="skybox" builtin="gradient" rgb1="0.3 0.4 0.5" rgb2="0.08 0.1 0.14"
+    <texture type="skybox" builtin="gradient" rgb1="0.68 0.73 0.77" rgb2="0.4 0.45 0.5"
              width="512" height="3072"/>
   </asset>
   <worldbody>
-    <light pos="0.4 -0.5 1.5" dir="0 0 -1" diffuse="0.6 0.6 0.6"/>
+    <light name="lab_task_light" pos="0.4 -0.5 1.8" dir="0 0 -1" diffuse="0.25 0.25 0.25"/>
     <geom name="table" type="box" pos="0.35 0 -0.03" size="0.65 0.5 0.03"
-          rgba="0.8 0.76 0.65 1" friction="1 0.005 0.0001"/>
-    <!-- Reviewed perspective views, looking down 34 degrees from opposite sides. -->
-    <camera name="side" pos="0.93 -0.64 0.65"
-            xyaxes="0.83393221 0.55186690 0 -0.30859863 0.46632682 0.82903931"
-            projection="perspective" fovy="34"/>
-    <camera name="front" pos="1.16 0.49 0.65"
-            xyaxes="-0.55186690 0.83393221 0 -0.46632682 -0.30859863 0.82903931"
-            projection="perspective" fovy="34"/>
+          material="lab_tabletop" friction="1 0.005 0.0001"/>
+    <!-- Approved axis-aligned views: Front on +X, Right Side on +Y, elevated 30 degrees.
+         Orthographic fovy is a 0.6 metre vertical span, not an angle. -->
+    <camera name="side" pos="0.46 1.0692304845413265 0.75"
+            xyaxes="-1 0 0 0 -0.5 0.8660254037844387"
+            projection="orthographic" fovy="0.6"/>
+    <camera name="front" pos="1.4992304845413265 0.03 0.75"
+            xyaxes="0 1 0 -0.5 0 0.8660254037844387"
+            projection="orthographic" fovy="0.6"/>
     <body name="cube" pos="0.48 -0.08 0.025">
       <freejoint name="cube_joint"/>
       <geom name="cube" type="box" size="0.02 0.02 0.02" mass="0.05"

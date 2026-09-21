@@ -1,0 +1,89 @@
+TASK: {task}
+STAGE: {stage}
+TARGET: {target}
+AFFORD: {affordance}
+Stage goal: {description}
+DONE WHEN: {completion}
+Gripper now: {gripper_state}
+{mem_text}
+{recovery}
+{proprio}
+
+DIRECTION:
+Images are ordered Wrist (A), Front (B), Right Side (C).
+Translation axes remain fixed in the robot/world frame after every rotation.
+Both external cameras are orthographic, tilted 30 degrees downward toward the table.
+GRIPPER motion in Front (B), on the +X side:
+- MV_FWD (+X): closer to the camera. MV_BACK (-X): farther from the camera.
+- MV_RIGHT (+Y): image-right. MV_LEFT (-Y): image-left.
+GRIPPER motion in Right Side (C), on the +Y side:
+- MV_FWD (+X): image-left. MV_BACK (-X): image-right.
+- MV_RIGHT (+Y): closer to the camera. MV_LEFT (-Y): farther from the camera.
+MV_UP (+Z) moves vertically upward, away from the table;
+MV_DOWN (-Z) moves vertically downward, toward the table.
+Front's horizontal position isolates Y alignment; Right Side's isolates X alignment.
+Depth and height can overlap visually; cross-check the external views and Wrist.
+Orthographic depth does not change apparent size. Image overlap alone does not
+establish alignment. Being above the target requires table-plane alignment and clearance.
+The wrist camera moves and rotates with the hand; its image left/right/up/down are
+NOT fixed world directions. Its EXACT image center is the grasp point (TCP); during
+pre-grasp approach, use that point as the centering anchor in BOTH image axes.
+An object anywhere between widely
+open fingers is not necessarily centered. Use the current measured wrist image-right and
+image-down world vectors supplied below to choose the corresponding world-axis command.
+Camera translation parallel to the Wrist image plane makes a stationary target shift
+oppositely in the image. Motion along the Wrist line of sight mainly changes apparent size.
+Use Front and Right Side to bring a target that is outside Wrist into view and to check height.
+Rotations turn the hand about its grasp point and carry a grasped object with it.
+They do not move the grasp point to a new position. Translations preserve orientation.
+{rotation}
+
+PRECISION AND CONTACT:
+- Choose LARGE only for clear travel; MEDIUM for approach; SMALL near objects or contact.
+- Correct position and orientation in separate decisions, checking fresh images each time.
+- Match the held object's required orientation to its destination before descending.
+- Compare the held object's contact point with the destination, not only the fingertips.
+- If descent stalls or the object touches an obstruction, back out and re-align using small steps.
+- If corrections overshoot repeatedly, reduce the step size and inspect all three views.
+- Do not infer successful placement from overlap in one view or from a gripper close alone.
+
+ATTENTION:
+{mem_text_rules}
+- DONE only when the current "DONE WHEN" condition is already visible.
+
+GRIPPER:
+{gripper_proprio}
+- During GRASP/pre-grasp approach only, before lowering toward the graspable part or
+  closing, establish XY alignment with independent positive evidence:
+  A / Wrist: the center of the {affordance} must be centered at the EXACT image center
+  in BOTH axes. A cropped or edge-only view of the graspable part cannot confirm alignment.
+  B / Front: compare the graspable part's center horizontally with the midpoint of the
+  inner {gripper_color} fingertip pads, not the hand body. Target left -> MV_LEFT;
+  target right -> MV_RIGHT. This checks Y alignment.
+  C / Right Side: compare the same target center horizontally with the grasp-point /
+  inner fingertip-pad midpoint column. Target left -> MV_FWD; target right -> MV_BACK.
+  This checks X alignment. Visible Side offset vetoes descent and GRASP even if Wrist looks aligned.
+- Align XY at safe clearance, then approach the graspable part's height with SMALL
+  steps near it, rechecking all views after each action. GRASP requires the actual
+  fingertip pads to straddle its body at contact height; being above it or overlapping
+  its silhouette is insufficient. For the plug, grasp the handle body, not its edge.
+- Reported height above the table is not clearance above the handle; use the images
+  to establish actual contact height. These pre-grasp centering checks do not apply
+  to INSERT/PLACE: there align the held object's contact point with its destination,
+  which may be occluded, rather than requiring it to coincide with the TCP.
+- These checks override generic rough-alignment, table-height, and oscillation-based
+  descent hints. Uncertain evidence means no GRASP. Make a SMALL correction when a
+  direction is visually justified; otherwise STOP. Do not use DONE or new subgoals
+  to escape an unresolved grasp.
+- An empty close establishes neither "too high" nor "overshot". Re-evaluate X, Y,
+  and Z independently in the fresh images before choosing the next correction.
+- Nonzero gripper width alone does not prove a centered, secure grasp. Edge contact
+  cannot satisfy grasp-stage DONE. Visually verify secure contact around the graspable
+  part's body before declaring the grasp complete or starting lift/transport.
+- During GRASP, RELEASE may reopen a visibly off-center or edge grasp only while the
+  object remains supported on its source stand/surface; then realign before closing.
+  Otherwise RELEASE only when the object is supported at its destination.
+{variable_step}
+{action_chunk}
+Think one visual sentence, then commit to exactly one atomic action.
+{output_contract}

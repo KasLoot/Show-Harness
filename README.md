@@ -153,23 +153,61 @@ The full walkthroughs are in [docs/franka.md](docs/franka.md) and
 [docs/piper.md](docs/piper.md); simulators in
 [docs/simulators.md](docs/simulators.md).
 
-To run entirely in **MuJoCo with Gemini** (`gemini-3.5-flash-lite`):
+To run entirely in **MuJoCo with OpenAI** (`gpt-5.6-sol`, medium reasoning):
 
 ```bash
 bash scripts/setup.sh mujoco
-# Set GEMINI_API_KEY in your shell or configs/secrets.env.
+# Set OPENAI_API_KEY in your shell or configs/secrets.env.
 uv run --no-project python scripts/run_mujoco.py
 # macOS viewport: .venv/bin/mjpython scripts/run_mujoco.py --gui
 ```
 
-The VLM receives Side, Wrist, and Front views. Add `--record` to save these three
-synchronized camera videos, a four-panel video with VLM
-decisions, and an annotated log. Add `--variable-step` for automatic 2 cm / 5 cm / 10 cm
+The original task sends Wrist (A), Front (B), and Right Side (C) views to the VLM. The two external
+views are orthographic and look down at 30 degrees, separating horizontal Y and X
+alignment. Add `--record` to save synchronized Side, Wrist, and Front camera videos,
+a combined video with the camera/decision canvas on the left and a recording-only
+global lab view on the right, and an annotated log. Add `--variable-step` for automatic 2 cm / 5 cm / 10 cm
 movements; without it, steps stay at 2 cm. Both flags are off by default. See [MuJoCo setup](docs/simulators.md#mujoco--cloud-models)
 for the offline smoke test, configuration, and recording options.
-Change `vlm_backends.gemini.model` in `configs/robot_mujoco.yaml`, set `GEMINI_MODEL`,
+Change `vlm_backends.openai.model` in `configs/robot_mujoco.yaml`, set `OPENAI_MODEL`,
 or pass `--model MODEL_NAME` for one run (the CLI override takes precedence).
-Use `--vlm-backend ollama` to select the existing Ollama profile and `OLLAMA_API_KEY`.
+Reasoning is enabled at `medium`; set `OPENAI_REASONING_EFFORT`, edit the profile's
+`reasoning_effort`, or pass `--reasoning-effort high` to change it.
+Use `--vlm-backend ollama` for `kimi-k3:cloud` with `OLLAMA_API_KEY`.
+Use `--vlm-backend gemini` to select the existing Gemini profile and `GEMINI_API_KEY`.
+
+The second MuJoCo task picks an orange-handled plug from its stand and inserts its
+silver cylindrical pin into the black bore of a blue socket:
+
+```bash
+uv run --no-project python scripts/run_mujoco.py --robot-config configs/robot_mujoco_plug.yaml
+# Offline movement/camera check (no VLM request): add --smoke-test.
+# macOS viewport: use .venv/bin/mjpython instead of uv run --no-project python, and add --gui.
+```
+
+This task adds VLM-selected small/medium/large translations (2 mm / 1 cm / 5 cm)
+and rotations around all three world axes (2° / 10° / 30°), with one action per
+decision. Its fourth view, Angled Wrist (D), exposes the pin and bore rim for fine
+insertion alignment; round pin and bore shapes require no keyed yaw rotation.
+The VLM receives four RGB views plus a 32×32 array of measured wrist-camera depths
+as text, in millimetres with pixel coordinates and camera calibration. The previous
+observation's depth array accompanies its RGB history and executed action. Grayscale
+depth remains available in local recordings. After a secure grasp, the prompt requests
+a 5 cm upward lift before lateral transport toward the tall socket. After seated
+release, a separate retreat must leave the open hand's TCP more than 5 cm above the
+plug's top, with the plug undisturbed; the prompt aims for a 5.5 cm gap.
+With `--record`, the plug run saves all five image streams and a combined video.
+The two-column, three-row camera/decision canvas stays intact on the left, with
+Wrist Depth and the decision in its last row. A closer global workspace view is
+appended on the right, exclusively for recording and never sent to the VLM.
+The existing planner, observation loop,
+and recovery remain in use.
+See [plug insertion and motion commands](docs/simulators.md#plug-insertion-and-explicit-cartesian-movements)
+for the vocabulary, configuration, and success checks.
+Replay a saved run smoothly without a VLM using
+`.venv/bin/mjpython scripts/mujoco/replay.py RUN_DIR --gui --verify --hold-final` on macOS.
+This re-executes logged actions through physics and checks recorded TCP waypoints;
+see [replay options](docs/simulators.md#replay-a-saved-mujoco-run) for dry runs and new video recordings.
 
 ### 4. Repository layout
 

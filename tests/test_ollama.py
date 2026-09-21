@@ -1,5 +1,6 @@
 """Native Ollama transport, offline; no SDK or live API key required."""
 import base64
+import io
 import json
 import unittest
 from unittest.mock import Mock, patch
@@ -18,6 +19,23 @@ def response(body, status=200):
 
 
 class OllamaTests(unittest.TestCase):
+    def test_five_camera_images_preserve_order_in_native_request(self):
+        from PIL import Image
+
+        client = VLMClient("https://ollama.com/api/", "test-model:cloud", "test-key",
+                           30, 8192, 0.0, provider="ollama")
+        self.addCleanup(client.session.close)
+        frames = [np.full((8, 8, 3), value, np.uint8) for value in (30, 90, 160, 230, 120)]
+        reply = response({"message": {"content": '{"decision":"STOP"}'}, "done": True})
+        with patch.object(client.session, "post", return_value=reply) as post:
+            client.complete_json("Wrist, Front, Right Side, Angled Wrist, Wrist Depth", frames[0],
+                                 wrist_image=frames[1:], schema={"type": "object"})
+        images = post.call_args.kwargs["json"]["messages"][0]["images"]
+        self.assertEqual(len(images), 5)
+        for encoded, expected in zip(images, frames):
+            with Image.open(io.BytesIO(base64.b64decode(encoded))) as image:
+                np.testing.assert_array_equal(np.asarray(image), expected)
+
     def test_images_json_and_thinking_use_native_cloud_contract(self):
         client = VLMClient("https://ollama.com/api/", "glm-5.3-flash:cloud", "test-key",
                            30, 8192, 0.0, provider="ollama", reasoning_effort="low")

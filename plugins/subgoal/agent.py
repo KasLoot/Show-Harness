@@ -108,11 +108,13 @@ class SubgoalPlannerAgent:
         wrist_image=None,
         debug: bool = False,
         image_roles: "list[str] | None" = None,
+        observation_text: str = "",
     ):
         started = time.monotonic()
         prompt = _join_prompt_parts(
             self.common_context,
             _image_roles_block(image_roles),
+            observation_text,
             self.prompt_template.format(task=task, video_ref=self.video_ref_block),
         )
         self._last_prompt = prompt

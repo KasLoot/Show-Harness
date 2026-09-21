@@ -28,6 +28,7 @@ class SubgoalPlanner:
         wrist=None,
         debug: bool = False,
         image_roles: "list[str] | None" = None,
+        observation_text: str = "",
     ) -> tuple[list[Subgoal], str]:
         response = self.agent.plan(
             task,
@@ -35,6 +36,7 @@ class SubgoalPlanner:
             wrist_image=wrist,
             debug=debug,
             image_roles=image_roles,
+            **({"observation_text": observation_text} if observation_text else {}),
         )
         diagnostics_fn = getattr(self.agent, "diagnostics", None)
         self._last_diagnostics = diagnostics_fn() if diagnostics_fn is not None else {}

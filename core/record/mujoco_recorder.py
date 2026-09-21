@@ -1,4 +1,4 @@
-"""Synchronized simulation camera videos, a four-panel canvas, and annotations."""
+"""Synchronized simulation camera videos, a combined canvas, and annotations."""
 from contextlib import ExitStack
 from datetime import datetime, timezone
 import json
@@ -14,6 +14,7 @@ from core.record.images import StreamingVideoWriter
 
 
 CAMERAS = ("side", "wrist", "front")
+GLOBAL_CAMERA = "lab_overview"
 
 
 class MujocoRecorder:
@@ -25,15 +26,27 @@ class MujocoRecorder:
         if not math.isfinite(hold) or not 0 <= hold <= 10:
             raise ValueError("recording.decision_hold_s must be between 0 and 10")
         self.session = session
+        self.cameras = tuple(getattr(session, "cameras", CAMERAS))
+        # This view belongs only to the combined recording. Never add it to the
+        # session's observation cameras or the per-camera VLM image streams.
+        self.global_camera = None
+        self._global_renderer = None
+        if getattr(session, "model", None) is not None:
+            try:
+                session.model.camera(GLOBAL_CAMERA)
+            except KeyError:
+                pass
+            else:
+                self.global_camera = GLOBAL_CAMERA
         self.hold_frames = max(1, round(hold * self.fps))
         self.directory = Path(directory)
         self.directory.mkdir(parents=True, exist_ok=True)
-        self.paths = {name: self.directory / f"{name}.mp4" for name in (*CAMERAS, "combined")}
+        self.paths = {name: self.directory / f"{name}.mp4" for name in (*self.cameras, "combined")}
         self.paths["annotations"] = self.directory / "annotations.jsonl"
         self._resources = ExitStack()
         self._log = self._resources.enter_context(self.paths["annotations"].open("w", encoding="utf-8"))
         self.writers = {name: StreamingVideoWriter(self.paths[name], self.fps)
-                        for name in (*CAMERAS, "combined")}
+                        for name in (*self.cameras, "combined")}
         for writer in self.writers.values():
             self._resources.callback(writer.close)
         self.frame_count = 0
@@ -49,7 +62,8 @@ class MujocoRecorder:
         self.title_font = _font(max(9, round(size * 16 / 512)), bold=True)
         self.action_font = _font(max(12, round(size * 36 / 512)), bold=True)
         try:
-            self.event("recording_started", fps=self.fps, model=model, task=task, cameras=CAMERAS,
+            self.event("recording_started", fps=self.fps, model=model, task=task, cameras=self.cameras,
+                       combined_only_cameras=[self.global_camera] if self.global_camera else [],
                        video_files={key: str(value) for key, value in self.paths.items()})
             self.capture(force=True)
         except BaseException:
@@ -89,8 +103,14 @@ class MujocoRecorder:
         now = float(self.session.data.time)
         if self._closed or (not force and now + 1e-9 < self._next_time):
             return
-        frames = {name: self.session.render(name) for name in CAMERAS}
-        frames["combined"] = self._canvas(frames, now - self._start_time)
+        frames = {name: self.session.render(name) for name in self.cameras}
+        canvas = self._canvas(frames, now - self._start_time)
+        if self.global_camera is not None:
+            # The right panel has a 32 px title and a square image filling the
+            # remaining height. The original canvas is never resized or cropped.
+            global_frame = self._render_global(canvas.shape[0] - 32)
+            canvas = self._append_global(canvas, global_frame)
+        frames["combined"] = canvas
         for _ in range(repeat):
             for name, frame in frames.items():
                 self.writers[name].append(frame)
@@ -98,18 +118,62 @@ class MujocoRecorder:
         while self._next_time <= now + 1e-9:
             self._next_time += 1 / self.fps
 
+    def _render_global(self, size):
+        """Recorder-owned render context; no observations or physics advances."""
+        if self._global_renderer is None:
+            import mujoco
+
+            settings = self.session.model.vis.global_
+            old_width, old_height = settings.offwidth, settings.offheight
+            try:
+                # MjrContext allocates its own framebuffer at construction.
+                # Restore model settings so normal camera buffers stay small.
+                settings.offwidth = max(old_width, size)
+                settings.offheight = max(old_height, size)
+                renderer = mujoco.Renderer(self.session.model, height=size, width=size)
+            finally:
+                settings.offwidth, settings.offheight = old_width, old_height
+            self._resources.callback(renderer.close)
+            self._global_renderer = renderer
+        self._global_renderer.update_scene(self.session.data, camera=self.global_camera)
+        return self._global_renderer.render().copy()
+
+    def _append_global(self, canvas, global_frame):
+        height, width = canvas.shape[:2]
+        image_size = height - 32
+        combined = Image.new("RGB", (width + image_size, height), (19, 25, 35))
+        combined.paste(Image.fromarray(canvas), (0, 0))
+        overview = Image.fromarray(global_frame)
+        if overview.size != (image_size, image_size):
+            overview = overview.resize((image_size, image_size), Image.Resampling.LANCZOS)
+        combined.paste(overview, (width, 32))
+        ImageDraw.Draw(combined).text((width + 12, 7), "GLOBAL VIEW", font=self.title_font,
+                                     fill=(218, 230, 240))
+        return np.asarray(combined)
+
     def _canvas(self, frames, sim_time):
         size = self.session.resolution
         bar = 32
-        canvas = Image.new("RGB", (2 * size, 2 * (size + bar)), (19, 25, 35))
+        five_views = "wrist_depth" in self.cameras
+        four_views = "wrist_insert" in self.cameras
+        panel_width = 2 * size if four_views and not five_views else size
+        panel_height = size
+        height = 2 * (size + bar) + (panel_height + bar if four_views else 0)
+        canvas = Image.new("RGB", (2 * size, height), (19, 25, 35))
         draw = ImageDraw.Draw(canvas)
-        for i, (name, title) in enumerate(zip(CAMERAS, ("ANGLED SIDE CAMERA", "WRIST CAMERA", "ANGLED FRONT CAMERA"))):
+        camera_order = ("wrist", "front", "side", "wrist_insert") if four_views else CAMERAS
+        if five_views:
+            camera_order += ("wrist_depth",)
+        titles = {"side": "C - RIGHT SIDE", "wrist": "A - WRIST", "front": "B - FRONT",
+                  "wrist_insert": "D - ANGLED WRIST", "wrist_depth": "E - WRIST DEPTH"}
+        for i, name in enumerate(camera_order):
             x, y = (i % 2) * size, (i // 2) * (size + bar)
             canvas.paste(Image.fromarray(frames[name]), (x, y + bar))
-            draw.text((x + 12, y + 7), title, font=self.title_font, fill=(218, 230, 240))
-        x, y = size, size + bar
+            draw.text((x + 12, y + 7), titles[name], font=self.title_font, fill=(218, 230, 240))
+        x, y = ((size, 2 * (size + bar)) if five_views else
+                (0, 2 * (size + bar)) if four_views else (size, size + bar))
         draw.text((x + 12, y + 7), "VLM OUTPUT / DECISION", font=self.title_font, fill=(45, 212, 191))
-        panel = Image.new("RGB", (size, size), (19, 25, 35))
+        panel = Image.new("RGB", (panel_width, panel_height), (19, 25, 35))
         text = ImageDraw.Draw(panel)
         margin = max(8, size // 24)
         line_h = self.font.size + 7
@@ -121,7 +185,7 @@ class MujocoRecorder:
 
         def paragraph(value, max_lines, color=(235, 241, 247)):
             nonlocal cursor
-            width = max(6, int((size - 2 * margin) / max(1, self.font.getlength("W"))))
+            width = max(6, int((panel_width - 2 * margin) / max(1, self.font.getlength("W"))))
             lines = textwrap.wrap(" ".join(str(value).split()), width=width)
             if len(lines) > max_lines:
                 lines = lines[:max_lines]
@@ -132,9 +196,9 @@ class MujocoRecorder:
 
         paragraph(self.context["stage"], 2, (154, 172, 193))
         cursor += 8
-        available = max(1, (size - cursor - 4 * line_h) // line_h)
+        available = max(1, (panel_height - cursor - 4 * line_h) // line_h)
         paragraph(self.context["annotation"] or self.context["vlm_output"], available)
-        footer = max(cursor + 8, size - 3 * line_h)
+        footer = max(cursor + 8, panel_height - 3 * line_h)
         text.text((margin, footer), f"SIM {sim_time:.2f}s  |  GRIP {self.session.get_gripper_position()[0] * 1000:.1f} mm",
                   font=self.title_font, fill=(154, 172, 193))
         text.text((margin, footer + line_h), f"Executing: {self.context.get('executing', '-')}",

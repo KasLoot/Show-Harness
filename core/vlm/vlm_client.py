@@ -80,7 +80,6 @@ class VLMClient:
         self.reasoning_directive = str(reasoning_directive or "")
         self.temperature = float(temperature)
         self.chat_template_kwargs = chat_template_kwargs or {}
-        self.reasoning_enabled = _reasoning_enabled(self.chat_template_kwargs)
         # provider names the endpoint/auth family. api_dialect selects the request shape:
         # "vllm" (local, guided decoding + chat_template_kwargs), "openai" (hosted
         # OpenAI Chat Completions / Azure OpenAI deployments), or "gemini" (Gemini-style
@@ -91,6 +90,12 @@ class VLMClient:
         if self.api_dialect == "ollama" and not self.base_url.endswith("/api"):
             self.base_url += "/api"
         self.reasoning_effort = reasoning_effort or None
+        # Hosted API reasoning is controlled by reasoning_effort, independently
+        # of the local chat-template switches used for the final action format.
+        self.reasoning_enabled = (
+            self.reasoning_effort != "none" if self._is_hosted() and self.reasoning_effort
+            else _reasoning_enabled(self.chat_template_kwargs)
+        )
         # Rate-limit / transient-error retry (on by default; tune via vlm_backends).
         self.max_retries = DEFAULT_MAX_RETRIES if max_retries is None else max(0, int(max_retries))
         self.retry_base_delay_s = (
@@ -139,9 +144,9 @@ class VLMClient:
         logprobs are dropped) and ``guided_json`` becomes an OpenAI-style
         ``response_format`` so the answer is still constrained to a JSON object. The
         dialects differ:
-          * openai: max_tokens -> max_completion_tokens; temperature only forwarded when
-            it is the default 1.0 (reasoning models reject a custom value); reasoning_effort
-            added when set.
+          * openai: max_tokens -> max_completion_tokens; omit temperature with
+            reasoning enabled, otherwise retain the compatible default 1.0;
+            reasoning_effort added when set.
           * gemini: standard max_tokens and temperature (0.0 is accepted and wanted for
             determinism); reasoning_effort forwarded when set (Gemini 2.5+/3.x thinking
             models accept it via the OpenAI-compat layer; omitted otherwise so non-thinking
@@ -195,7 +200,7 @@ class VLMClient:
             if "max_tokens" in payload:
                 out["max_completion_tokens"] = payload["max_tokens"]
             temperature = payload.get("temperature")
-            if temperature is not None and float(temperature) == 1.0:
+            if not self.reasoning_enabled and temperature is not None and float(temperature) == 1.0:
                 out["temperature"] = 1.0
         else:  # gemini
             if "max_tokens" in payload:

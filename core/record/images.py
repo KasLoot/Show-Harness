@@ -178,6 +178,25 @@ def image_manifest(cameras: Sequence[str], images: Sequence) -> list[dict]:
     return manifest
 
 
+def vlm_camera_views(obs: dict, primary: np.ndarray, wrist: Optional[np.ndarray]) -> list[tuple[str, np.ndarray]]:
+    """Order named model inputs without changing the runner's physical camera slots.
+
+    MuJoCo uses Wrist, Front, then Right Side, plus Angled Wrist for the plug.
+    Numeric wrist depth travels as text; its diagnostic grayscale PNG is not a VLM view.
+    Other sessions retain
+    their existing primary, wrist, extra-view order. Planner and controller share
+    this function so their image roles and payloads cannot disagree.
+    """
+    views = [(str(obs.get("primary_camera", "AgentView")), primary)]
+    if wrist is not None:
+        views.insert(0 if obs.get("wrist_first", False) else len(views), ("Wrist", wrist))
+    labels = {"wrist_insert": "Angled Wrist", "wrist_depth": "Wrist Depth"}
+    views.extend((labels.get(name, name.title()), frame)
+                 for name, frame in (obs.get("extra_views") or {}).items()
+                 if frame is not None and not (name == "wrist_depth" and obs.get("wrist_depth_text")))
+    return views
+
+
 def save_png(path: str | Path, image: np.ndarray) -> None:
     Path(path).parent.mkdir(parents=True, exist_ok=True)
     Image.fromarray(to_uint8_hwc(image)).save(path)

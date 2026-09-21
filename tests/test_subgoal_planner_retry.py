@@ -44,6 +44,16 @@ class _RetryClient:
 
 
 class SubgoalPlannerRetryTests(unittest.TestCase):
+    def test_numeric_depth_observation_survives_all_planner_retries(self) -> None:
+        client = _RetryClient()
+        planner = SubgoalPlanner(SubgoalPlannerAgent(client, "CURRENT RGB views"))
+        depth_text = 'CURRENT WRIST DEPTH:\n{"name":"WRIST_DEPTH_MM","depth_mm":[[120,null],[240,260]]}'
+        planner.plan("Insert plug", np.zeros((2, 2, 3), np.uint8), observation_text=depth_text)
+        self.assertTrue(client.json_prompts)
+        self.assertTrue(client.text_prompts)
+        for prompt in client.json_prompts + client.text_prompts:
+            self.assertEqual(prompt.count(depth_text), 1)
+
     def test_pregrasp_merge_folds_a_pure_reach_into_the_grasp_stage(self) -> None:
         class _StaticAgent:
             def plan(self, task, image, **kwargs):

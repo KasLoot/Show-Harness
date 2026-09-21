@@ -1,5 +1,7 @@
 """Physical pick/place check. Requires `bash scripts/setup.sh mujoco`; no cloud calls."""
 import importlib.util
+import base64
+import io
 import json
 import os
 from pathlib import Path
@@ -19,16 +21,31 @@ AVAILABLE = importlib.util.find_spec("mujoco") is not None and (
 
 @unittest.skipUnless(AVAILABLE, "Run bash scripts/setup.sh mujoco for the physics check")
 class MujocoTests(unittest.TestCase):
-    def test_side_wrist_front_reach_planner_controller_and_saved_observations(self):
+    def test_wrist_front_side_reach_planner_controller_and_saved_observations(self):
+        for config in ("robot_mujoco.yaml", "robot_mujoco_plug.yaml"):
+            with self.subTest(config=config):
+                self._check_view_inputs(config)
+
+    def _check_view_inputs(self, config):
         from PIL import Image
         from core.config import load_yaml
-        from core.vlm.vlm_client import VLMResponse
+        from core.sim.mujoco_depth import depth_to_grayscale
+        from core.vlm.vlm_client import VLMResponse, _message_content
         from scripts.run_mujoco import main
 
-        cfg = load_yaml(ROOT / "configs/robot_mujoco.yaml")
+        cfg = load_yaml(ROOT / "configs" / config)
         cfg.update(max_steps=1, camera_resolution=128)
+        plug = cfg.get("scene") == "plug_insert"
+        if plug:
+            # Exercise the shared setting through actual planner/controller prompts
+            # and persisted evaluator diagnostics, beyond the default 50 mm.
+            cfg["plug_success"] = {"retreat_clearance_m": 0.07}
+        order = ("wrist", "front", "side", "wrist_insert") if plug else ("wrist", "front", "side")
         frames = {name: np.full((128, 128, 3), value, np.uint8)
-                  for name, value in (("side", 40), ("wrist", 100), ("front", 200))}
+                  for name, value in (("side", 40), ("wrist", 100), ("front", 200),
+                                      ("wrist_insert", 240), ("wrist_depth", 150))}
+        depth_m = np.full((128, 128), 0.12, np.float32)
+        frames["wrist_depth"] = depth_to_grayscale(depth_m)
         plan = {"subgoals": [{"id": "lift", "motion": "LIFT", "target": "cube",
                               "affordance": "cube", "description": "Lift the cube.",
                               "completion": "Cube above table."}]}
@@ -37,68 +54,238 @@ class MujocoTests(unittest.TestCase):
         client.complete_json.side_effect = [VLMResponse("", json.dumps(v), {"json": v}) for v in (plan, action)]
         with TemporaryDirectory() as directory, \
                 patch("core.sim.mujoco_session.MujocoSession.render", side_effect=frames.__getitem__), \
+                patch("core.sim.mujoco_session.MujocoSession.render_depth", return_value=depth_m), \
                 patch("scripts.run_mujoco.make_vlm_client", return_value=client) as factory, \
-                patch.dict(os.environ, {"GEMINI_API_KEY": "test-key", "OLLAMA_API_KEY": "test-key"}):
+                patch.dict(os.environ, {"OPENAI_API_KEY": "test-key", "GEMINI_API_KEY": "test-key", "OLLAMA_API_KEY": "test-key"}):
             config_path = Path(directory) / "config.yaml"
             config_path.write_text(yaml.safe_dump(cfg))
             self.assertEqual(main(["--robot-config", str(config_path), "--log-dir", directory,
-                                   "--model", "test-model:cloud"]), 1)
-            self.assertEqual(factory.call_args.args[1]["vlm"]["model"], "test-model:cloud")
-            self.assertEqual(factory.call_args.args[1]["vlm_backend"], "gemini")
-            self.assertEqual(factory.call_args.args[1]["vlm"]["provider"], "gemini")
+                                   "--model", "test-openai-model"]), 1)
+            self.assertEqual(factory.call_args.args[1]["vlm"]["model"], "test-openai-model")
+            self.assertEqual(factory.call_args.args[1]["vlm_backend"], "openai")
+            self.assertEqual(factory.call_args.args[1]["vlm"]["provider"], "openai")
             self.assertEqual(factory.call_args.args[1]["vlm"]["api_key"], "test-key")
             self.assertEqual(client.complete_json.call_count, 2)
             for call in client.complete_json.call_args_list:
-                np.testing.assert_array_equal(call.args[1], frames["side"])
-                self.assertEqual(len(call.kwargs["wrist_image"]), 2)
-                for sent, name in zip(call.kwargs["wrist_image"], ("wrist", "front")):
+                np.testing.assert_array_equal(call.args[1], frames["wrist"])
+                self.assertEqual(len(call.kwargs["wrist_image"]), len(order) - 1)
+                for sent, name in zip(call.kwargs["wrist_image"], order[1:]):
                     np.testing.assert_array_equal(sent, frames[name])
+                content = _message_content(call.args[0], call.args[1], call.kwargs["wrist_image"])
+                images = [part for part in content if part["type"] == "image_url"]
+                self.assertEqual(len(images), len(order))
+                for part, name in zip(images, order):
+                    encoded = part["image_url"]["url"].split(",", 1)[1]
+                    with Image.open(io.BytesIO(base64.b64decode(encoded))) as sent:
+                        np.testing.assert_array_equal(np.asarray(sent), frames[name])
                 self.assertNotIn("AgentView", call.args[0])
-                self.assertIn("A and C mix height and table-plane depth", call.args[0])
+                self.assertNotIn("Front (C)", call.args[0])
+                self.assertIn("Four simultaneous RGB images" if plug else "Three simultaneous images", call.args[0])
+                if plug:
+                    self.assertIn("WRIST_DEPTH_MM", call.args[0])
+                    self.assertIn("TCP plane is 48.0 mm", call.args[0])
+                    self.assertIn("strictly more than 70 mm", call.args[0])
+                    self.assertIn("at least 75 mm", call.args[0])
+                    self.assertNotIn("{retreat_", call.args[0])
+                    self.assertNotIn("success_diagnostics", call.args[0])
+                    self.assertNotIn("plug_top_height_m", call.args[0])
+                else:
+                    self.assertNotIn("Wrist Depth", call.args[0])
+                self.assertIn("closer", call.args[0])
+                self.assertIn("farther", call.args[0])
+                self.assertIn("orthographic", call.args[0])
+                for obsolete in ("down-right", "down-left", "up-right", "up-left",
+                                 "A and C mix height", "Front (B) for coarse"):
+                    self.assertNotIn(obsolete, call.args[0])
             controller_prompt = client.complete_json.call_args_list[-1].args[0]
             self.assertIn("24.0 cm above the table", controller_prompt)
-            self.assertIn("down-right in A, down-left in C", controller_prompt)
+            labels = "Wrist (A), Front (B), Right Side (C)" + (", Angled Wrist (D)" if plug else "")
+            self.assertIn(f"Images are ordered {labels}.", controller_prompt)
             self.assertNotIn("MV_DOWN first", controller_prompt)
             run = next(Path(directory).rglob("steps.jsonl")).parent
-            self.assertEqual({p.name for p in (run / "images").iterdir()}, set(frames))
-            for name, frame in frames.items():
-                np.testing.assert_array_equal(np.asarray(Image.open(run / "images" / name / "0000.png")), frame)
-            np.testing.assert_array_equal(np.asarray(Image.open(run / "planner_front.png")), frames["front"])
+            step = json.loads((run / "steps.jsonl").read_text().splitlines()[0])
+            summary = json.loads((run / "summary.json").read_text())
+            if plug:
+                for record in (step, summary):
+                    diagnostics = record["success_diagnostics"]
+                    self.assertFalse(diagnostics["success"])
+                    self.assertEqual(diagnostics["criteria"]["retreat_clearance"]["threshold"], 0.07)
+            else:
+                for record in (step, summary):
+                    self.assertEqual(record["success_diagnostics"]["scene"], "pick_place")
+                    self.assertEqual(record["success_diagnostics"]["criteria"], {})
+            saved_order = (*order, "wrist_depth") if plug else order
+            self.assertEqual({p.name for p in (run / "images").iterdir()}, set(saved_order))
+            for name in saved_order:
+                np.testing.assert_array_equal(np.asarray(Image.open(run / "images" / name / "0000.png")), frames[name])
+                np.testing.assert_array_equal(np.asarray(Image.open(run / f"planner_{name}.png")), frames[name])
+            roles = json.loads((run / "planner_diagnostics.json").read_text())["attempts"][0]["image_roles"]
+            self.assertEqual(len(roles), len(order))
+            role_names = ("Wrist", "Front", "Side", "Angled Wrist") if plug else ("Wrist", "Front", "Side")
+            for role, name in zip(roles, role_names):
+                self.assertIn(name, role)
+            if plug:
+                np.testing.assert_array_equal(np.load(run / "planner_wrist_depth_m.npy"), depth_m)
+                np.testing.assert_array_equal(np.load(run / "depth/wrist/0000.npy"), depth_m)
+                initial_depth = (run / "planner_wrist_depth.txt").read_text()
+                self.assertIn(initial_depth, client.complete_json.call_args_list[0].args[0])
+                current_depth = (run / "depth/wrist/0000.txt").read_text()
+                self.assertIn(current_depth, controller_prompt)
+                self.assertNotIn("Wrist Depth (E)", controller_prompt)
             self.assertFalse(list(run.rglob("*.mp4")))
 
-    def test_angled_camera_directions_match_physical_moves(self):
+    def test_insertion_camera_mount_tracks_hand_and_reports_measured_world_axes(self):
+        import mujoco
         from core.config import load_yaml
         from core.sim.mujoco_session import MujocoSession
         from scripts.run_mujoco import make_controller
 
-        cfg = load_yaml(ROOT / "configs/robot_mujoco.yaml")
+        cfg = load_yaml(ROOT / "configs/robot_mujoco_plug.yaml")
         session = MujocoSession(cfg)
         self.addCleanup(session.close)
+        camera = session.model.camera("wrist_insert")
+        local_right = np.array([0.0, -1.0, 0.0])
+        local_up = np.array([-0.7488700551657237, 0.0, -0.6627168629785166])
+        local_rotation = np.column_stack((local_right, local_up, np.cross(local_right, local_up)))
+        self.assertEqual(camera.bodyid[0], session.model.body("hand").id)
+        np.testing.assert_allclose(camera.pos, [0.1, 0.0, 0.045], atol=1e-12)
+        self.assertAlmostEqual(camera.fovy[0], 65)
+        self.assertEqual(session.model.cam_projection[camera.id], mujoco.mjtProjection.mjPROJ_PERSPECTIVE)
+        self.assertEqual(set(session.cameras), {"side", "wrist", "front", "wrist_insert", "wrist_depth"})
         controller = make_controller(session, cfg)
+        observed_axes = []
+        with patch.object(session, "render", return_value=np.zeros((16, 16, 3), np.uint8)), \
+                patch.object(session, "render_depth", return_value=np.full((16, 16), 0.12, np.float32)):
+            for token in (None, "ROT_X_POS_MEDIUM", "ROT_Z_NEG_MEDIUM"):
+                if token:
+                    controller.step(token)
+                hand = session.data.body("hand")
+                hand_rotation = hand.xmat.reshape(3, 3)
+                view = session.data.camera("wrist_insert")
+                expected_rotation = hand_rotation @ local_rotation
+                np.testing.assert_allclose(view.xpos, hand.xpos + hand_rotation @ camera.pos, atol=1e-10)
+                np.testing.assert_allclose(view.xmat.reshape(3, 3), expected_rotation, atol=1e-10)
+                obs = session.get_observation()
+                self.assertEqual(list(obs["extra_views"]), ["side", "wrist_insert", "wrist_depth"])
+                calibration = obs["wrist_depth_calibration"]
+                self.assertEqual((calibration["near_m"], calibration["far_m"]), (0.0, 0.30))
+                self.assertAlmostEqual(calibration["tcp_depth_m"], 0.048, places=8)
+                axes = obs["insertion_camera_axes"]
+                for name, expected in (("image_right", expected_rotation[:, 0]),
+                                       ("image_down", -expected_rotation[:, 1]),
+                                       ("sightline", -expected_rotation[:, 2])):
+                    np.testing.assert_allclose(axes[name], expected, atol=1e-10)
+                observed_axes.append(np.asarray(axes["image_down"]))
+                if token is None:
+                    np.testing.assert_allclose(axes["image_right"], [0, 1, 0], atol=0.001)
+                    np.testing.assert_allclose(axes["image_down"], [0.7488700551657237, 0, -0.6627168629785166], atol=0.001)
+                    np.testing.assert_allclose(axes["sightline"], [-0.6627168629785166, 0, -0.7488700551657237], atol=0.001)
+        self.assertTrue(all(np.linalg.norm(after - before) > 0.1
+                            for before, after in zip(observed_axes, observed_axes[1:])))
 
-        def project(name, point):
-            camera = session.data.camera(name)
-            local = camera.xmat.reshape(3, 3).T @ (point - camera.xpos)
-            return np.array([local[0], -local[1]]) / -local[2]
+        cube = MujocoSession(load_yaml(ROOT / "configs/robot_mujoco.yaml"))
+        self.addCleanup(cube.close)
+        self.assertEqual(set(cube.cameras), {"side", "wrist", "front"})
+        self.assertEqual(mujoco.mj_name2id(cube.model, mujoco.mjtObj.mjOBJ_CAMERA, "wrist_insert"), -1)
+        with patch.object(cube, "render", return_value=np.zeros((16, 16, 3), np.uint8)):
+            cube_obs = cube.get_observation()
+            for key in ("insertion_camera_axes", "wrist_depth", "wrist_depth_calibration"):
+                self.assertNotIn(key, cube_obs)
 
-        for name in ("side", "front"):
-            self.assertEqual(session.model.cam_projection[session.model.camera(name).id],
-                             session.model.cam_projection[session.model.camera("wrist").id])
-        self.assertEqual(session.table_height_m, 0.0)
-        self.assertEqual(controller.z_floor_m, 0.025)
-        for token, inverse, signs in (
-            ("MV_FWD", "MV_BACK", {"side": (1, 1), "front": (-1, 1)}),
-            ("MV_RIGHT", "MV_LEFT", {"side": (1, -1), "front": (1, 1)}),
-            ("MV_UP", "MV_DOWN", {"side": (0, -1), "front": (0, -1)}),
-        ):
-            before = {name: project(name, session.get_ee_pose()[:3]) for name in signs}
-            controller.step(token)
-            for name, expected in signs.items():
-                delta = project(name, session.get_ee_pose()[:3]) - before[name]
-                for value, sign in zip(delta, expected):
-                    if sign:
-                        self.assertGreater(value * sign, 0, f"{token} in {name}")
-            controller.step(inverse)
+    def test_recording_global_view_does_not_enter_observations_or_vlm_inputs(self):
+        from core.config import load_yaml
+        from core.record.images import vlm_camera_views
+        from core.record.mujoco_recorder import MujocoRecorder
+        from core.sim.mujoco_session import MujocoSession
+
+        cfg = load_yaml(ROOT / "configs/robot_mujoco_plug.yaml")
+        cfg["camera_resolution"] = 128
+        session = MujocoSession(cfg)
+        self.addCleanup(session.close)
+        cameras = session.cameras
+        before = session.data.time
+        rgb = np.zeros((128, 128, 3), np.uint8)
+        with TemporaryDirectory() as directory, \
+                patch.object(session, "render", return_value=rgb), \
+                patch.object(session, "render_depth", return_value=np.full((128, 128), .12, np.float32)), \
+                patch("core.record.mujoco_recorder.MujocoRecorder._render_global", return_value=rgb) as render_global:
+            recorder = MujocoRecorder(session, directory, fps=5, decision_hold_s=0)
+            session.recorder = recorder
+            try:
+                observation = session.get_observation()
+                views = vlm_camera_views(observation, observation["agentview"], observation["wrist"])
+                self.assertEqual([name for name, _ in views], ["Wrist", "Front", "Side", "Angled Wrist"])
+                self.assertNotIn("lab_overview", observation)
+                self.assertNotIn("lab_overview", observation["extra_views"])
+                self.assertEqual(session.cameras, cameras)
+                self.assertEqual(session.data.time, before)
+                self.assertEqual(recorder.global_camera, "lab_overview")
+                render_global.assert_called_once_with(448)
+            finally:
+                recorder.close()
+
+    def test_orthographic_front_side_basis_and_depth_match_physical_moves(self):
+        import mujoco
+        from core.config import load_yaml
+        from core.sim.mujoco_session import MujocoSession
+        from scripts.run_mujoco import make_controller
+
+        cosine = np.sqrt(3) / 2
+        cameras = {
+            "front": ([1.4992304845413265, 0.03, 0.75],
+                      [[0, 1, 0], [-0.5, 0, cosine], [cosine, 0, 0.5]]),
+            "side": ([0.46, 1.0692304845413265, 0.75],
+                     [[-1, 0, 0], [0, -0.5, cosine], [0, cosine, 0.5]]),
+        }
+        # Each vector is (image-right, image-down, toward-camera), in metres.
+        # Orthographic projection must not divide image coordinates by depth.
+        expected_directions = {
+            "MV_FWD": {"front": [0, 0.5, cosine], "side": [-1, 0, 0]},
+            "MV_RIGHT": {"front": [1, 0, 0], "side": [0, 0.5, cosine]},
+            "MV_UP": {"front": [0, -cosine, 0.5], "side": [0, -cosine, 0.5]},
+        }
+        for config in ("robot_mujoco.yaml", "robot_mujoco_plug.yaml"):
+            with self.subTest(config=config):
+                cfg = load_yaml(ROOT / "configs" / config)
+                session = MujocoSession(cfg)
+                try:
+                    controller = make_controller(session, cfg)
+                    self.assertEqual(session.table_height_m, 0.0)
+                    self.assertEqual(controller.z_floor_m, 0.025)
+                    for name, (position, basis) in cameras.items():
+                        camera_id = session.model.camera(name).id
+                        self.assertEqual(session.model.cam_projection[camera_id],
+                                         mujoco.mjtProjection.mjPROJ_ORTHOGRAPHIC)
+                        self.assertAlmostEqual(session.model.cam_fovy[camera_id], 0.6)
+                        np.testing.assert_allclose(session.data.camera(name).xpos, position, atol=1e-8)
+                        np.testing.assert_allclose(session.data.camera(name).xmat.reshape(3, 3).T,
+                                                   basis, atol=1e-8)
+                    self.assertEqual(session.model.cam_projection[session.model.camera("wrist").id],
+                                     mujoco.mjtProjection.mjPROJ_PERSPECTIVE)
+
+                    def image_and_depth(name, point):
+                        camera = session.data.camera(name)
+                        local = camera.xmat.reshape(3, 3).T @ (point - camera.xpos)
+                        return local * [1, -1, 1]
+
+                    for forward, reverse in (("MV_FWD", "MV_BACK"),
+                                             ("MV_RIGHT", "MV_LEFT"), ("MV_UP", "MV_DOWN")):
+                        for token, sign in ((forward, 1), (reverse, -1)):
+                            before = {name: image_and_depth(name, session.get_ee_pose()[:3])
+                                      for name in cameras}
+                            result = controller.step(token)
+                            for name in cameras:
+                                delta = image_and_depth(name, session.get_ee_pose()[:3]) - before[name]
+                                expected = np.asarray(expected_directions[forward][name]) * sign * result.step_m
+                                # Match the simulator's existing 3 mm tracking tolerance;
+                                # exact axis isolation is established by the camera basis above.
+                                np.testing.assert_allclose(delta, expected, atol=0.003,
+                                                           err_msg=f"{token} in {name} ({config})")
+                                for measured, component in zip(delta, expected):
+                                    if component:
+                                        self.assertGreater(measured * component, 0, f"{token} in {name}")
+                finally:
+                    session.close()
 
     def test_all_three_step_sizes_physically_move_the_requested_distance(self):
         from core.config import load_yaml
@@ -228,7 +415,7 @@ class MujocoTests(unittest.TestCase):
         with TemporaryDirectory() as directory, patch("mujoco.Renderer") as renderer, \
                 patch("scripts.run_mujoco.make_vlm_client", return_value=client), \
                 patch("scripts.run_mujoco.make_controller", side_effect=build_controller), \
-                patch.dict(os.environ, {"GEMINI_API_KEY": "test-key", "OLLAMA_API_KEY": "test-key"}):
+                patch.dict(os.environ, {"OPENAI_API_KEY": "test-key", "GEMINI_API_KEY": "test-key", "OLLAMA_API_KEY": "test-key"}):
             renderer.return_value.render.return_value = np.zeros((128, 128, 3), np.uint8)
             config_path = Path(directory) / "config.yaml"
             for i, (enabled, visible, height, token, distance) in enumerate(cases):
@@ -299,7 +486,7 @@ class MujocoTests(unittest.TestCase):
         client.complete_json.return_value = VLMResponse("", json.dumps(answer), {"json": answer})
         with TemporaryDirectory() as directory, patch("mujoco.Renderer") as renderer, \
                 patch("scripts.run_mujoco.make_vlm_client", return_value=client), \
-                patch.dict(os.environ, {"GEMINI_API_KEY": "test-key", "OLLAMA_API_KEY": "test-key"}):
+                patch.dict(os.environ, {"OPENAI_API_KEY": "test-key", "GEMINI_API_KEY": "test-key", "OLLAMA_API_KEY": "test-key"}):
             renderer.return_value.render.return_value = np.zeros((128, 128, 3), np.uint8)
             config_path = Path(directory) / "config.yaml"
             config_path.write_text(yaml.safe_dump(cfg))

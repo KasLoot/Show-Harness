@@ -272,6 +272,7 @@ def resolve_vlm_config(cfg: Dict[str, Any], backend: str | None = None) -> Dict[
         vlm = deep_merge(vlm, profile)
     resolve_env_field(vlm, "base_url")
     resolve_env_field(vlm, "model")
+    resolve_env_field(vlm, "reasoning_effort")
     if "model" not in vlm:
         raise ValueError(
             f"Resolved vlm config for backend {name!r} has no 'model'; "

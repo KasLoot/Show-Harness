@@ -1,0 +1,209 @@
+TASK: {task}
+STAGE: {stage}
+TARGET: {target}
+AFFORD: {affordance}
+Stage goal: {description}
+DONE WHEN: {completion}
+Gripper now: {gripper_state}
+{mem_text}
+{recovery}
+{proprio}
+
+DIRECTION AND VIEWS:
+Images are ordered Wrist (A), Front (B), Right Side (C), Angled Wrist (D).
+These are four RGB views.
+The CURRENT A-D set comes first, with its matching WRIST_DEPTH_MM text array and
+calibration. Any older sets are labeled HISTORY step N and follow oldest to newest.
+Each history set includes the depth array and calibration from that SAME before-action
+observation, paired with the executed action and measured movement that followed it.
+Use history to see how a correction changed alignment or stalled, not
+as evidence that an old alignment still holds. CURRENT images govern the next action
+and stage completion. A commanded movement is not proof that it occurred. Do not reuse
+old wrist pixel coordinates after the hand camera moves or rotates.
+Translation axes remain fixed in the robot/world frame after every rotation.
+Both external cameras are orthographic, tilted 30 degrees downward toward the table.
+GRIPPER motion in Front (B), on the +X side:
+- MV_FWD (+X): closer to the camera. MV_BACK (-X): farther from the camera.
+- MV_RIGHT (+Y): image-right. MV_LEFT (-Y): image-left.
+GRIPPER motion in Right Side (C), on the +Y side:
+- MV_FWD (+X): image-left. MV_BACK (-X): image-right.
+- MV_RIGHT (+Y): closer to the camera. MV_LEFT (-Y): farther from the camera.
+MV_UP (+Z) moves vertically upward, away from the table;
+MV_DOWN (-Z) moves vertically downward, toward the table.
+Front's horizontal position isolates Y alignment; Right Side's isolates X alignment.
+Depth and height can overlap visually; cross-check the views. Orthographic depth does
+not change apparent size. Image overlap alone does not establish alignment.
+Both wrist cameras move and rotate with the hand; their image axes are NOT fixed
+world directions. Use each camera's current measured image-right, image-down, and
+available sightline world vectors supplied below to select world-axis movements.
+A / Wrist: its EXACT image center is the grasp point (TCP). During pre-grasp approach,
+use that point as the handle-centering anchor in BOTH image axes. An object anywhere
+between widely open fingers is not necessarily centered.
+D / Angled Wrist: this oblique camera looks below the TCP to expose the silver pin
+and black bore rim. Its image center is NOT the grasp point or a centering target.
+The WRIST_DEPTH_MM observation's depth_mm text array is point-sampled from the SAME
+camera and projection as A, normally 32 rows by 32 columns. Rows run top to bottom
+and columns left to right. source_width_px/source_height_px describe the original
+RGB dimensions; sample_y_px/sample_x_px map each array row/column to exact zero-based
+pixel indices in A. An entry is one sampled pixel, not an average over a tile. Use this
+mapping and A to identify visible handle and fingertip-pad surfaces before comparing
+their depths. Values are camera-axis distance in MILLIMETRES, rounded to 1 mm, NOT
+world Z or clearance from the TCP. Use the supplied range and camera-to-TCP calibration;
+the camera is behind the grasp point. Wrist rotation changes the relationship between
+camera-axis depth and world Z. null means invalid or outside the configured range,
+never proof of empty space. Only visible, sampled surfaces have depth evidence; the
+sparse grid can miss narrow edges or pads and does not provide depth for every RGB
+pixel. A number alone cannot identify an object or establish its complete shape,
+pose, or contact. There is no fifth image; local grayscale diagnostics are not model inputs.
+In either wrist view, camera translation parallel to its image plane makes a stationary
+target shift oppositely in the image; motion along its sightline mainly changes apparent size.
+Use the external views to bring objects into view and check height. Rotations turn
+the hand about its grasp point and carry the grasped plug with it; translations preserve
+orientation. The silver pin and black bore are round: no keyed yaw alignment is needed.
+Do not rotate around Z just to fit the bore; correct shaft tilt only when visibly needed.
+{rotation}
+
+GRASP AND CONTACT:
+{gripper_proprio}
+- During GRASP/pre-grasp approach only, before lowering toward the handle or closing,
+  establish XY alignment with independent positive evidence from A, B, and C:
+  A / Wrist: the orange handle center must be centered at the EXACT image center in
+  BOTH axes. A cropped or edge-only handle view cannot confirm alignment.
+  B / Front: compare the handle center horizontally with the midpoint of the inner
+  {gripper_color} fingertip pads, not the hand body. Target left -> MV_LEFT;
+  target right -> MV_RIGHT. This checks Y alignment.
+  C / Right Side: compare the same handle center horizontally with the grasp-point /
+  inner fingertip-pad midpoint column. Target left -> MV_FWD; target right -> MV_BACK.
+  This checks X alignment. Visible Side offset vetoes descent and GRASP even if A looks aligned.
+  D adds useful grasp evidence when visible; full handle visibility in D is not required.
+- Before closing, compare mapped handle and fingertip-pad samples in WRIST_DEPTH_MM against
+  their identities and geometry in A/B/C. Depth must be consistent with the pads reaching
+  around the handle body. A shallow fingertip touch or edge-only grip is insufficient.
+  Similar numerical depths do not prove secure contact, and different visible surfaces
+  need not have identical values. The array supplements the independent A/B/C alignment
+  checks; it does not reveal an occluded or unsampled pad or handle surface.
+- The handle is 32 mm tall. When it is upright and A looks straight down, its side-body
+  center is 16 mm below its visible top face. For a body-center grasp, the top-face
+  depth should therefore be approximately 16 mm CLOSER to the camera than the supplied
+  TCP-plane depth, not equal to it. Cross-check A/B/C and the visible finger-pad depths.
+  Do not apply this shortcut to a tilted handle/wrist or an obscured top face.
+- Align XY at safe clearance, then approach handle height with SMALL steps near it,
+  rechecking after every action. GRASP requires the actual fingertip pads to straddle
+  the handle body at contact height; being above it or overlapping its silhouette is
+  insufficient. Grasp the body, not an edge.
+- Reported height above the table is not clearance above the handle; images establish
+  actual contact height. These pre-grasp centering checks do not apply to INSERT/PLACE:
+  there align the held pin with the bore, not the handle or TCP with an image center.
+- These grasp checks override generic rough-alignment, table-height, and oscillation-based
+  descent hints. Uncertain evidence means no GRASP. Make a SMALL correction when visually
+  justified; otherwise STOP. Do not use DONE or new subgoals to escape an unresolved grasp.
+- An empty close establishes neither "too high" nor "overshot". Re-evaluate X, Y, and Z
+  independently in fresh images before choosing the next correction.
+- Nonzero gripper width alone does not prove a centered, secure grasp. Edge contact cannot
+  satisfy grasp-stage DONE. Visually verify secure handle contact before lift/transport.
+- During GRASP, RELEASE may reopen a visibly off-center or edge grasp only while the
+  plug remains supported on its source stand/surface; then realign before closing.
+  Otherwise RELEASE only when the plug is seated and supported at its destination.
+
+LIFT BEFORE TRANSPORT:
+- After a secure handle-body grasp, complete a separate 50 mm (5 cm) upward lift
+  before any lateral transport toward the tall blue socket. Choose MV_UP_LARGE,
+  which commands exactly 50 mm in the default plug configuration, as one atomic decision.
+  Use the next observation and measured movement to verify completion; issuing the
+  token alone does not complete the lift. If motion was incomplete, inspect the cause
+  and finish the remaining lift with justified sized upward steps rather than blindly
+  repeating the full 50 mm command.
+  If command sizes were customized, use their supplied amounts to complete the same lift goal.
+- LIFT DONE requires the measured 50 mm upward movement from the secure-grasp pose,
+  secure carry with no handle slip, and the pin bottom visibly clear of the stand
+  and the blue socket's top along the transport path. If clearance is still inadequate,
+  raise safely before lateral travel. A TCP rise without plug rise is not a successful lift.
+- During transport or later stages, do not restart the completed post-grasp LIFT milestone
+  simply because a stage or recovery begins. Use the current stage and available history
+  to interpret progress; a recovery that requires a new secure grasp requires a new lift.
+  Subsequent clearance corrections depend on current images. This remains a VLM-chosen action milestone,
+  not an automatic lift or a multi-action response.
+
+PIN INSERTION:
+- The orange handle carries a silver cylindrical pin, 20 mm in diameter. The blue socket
+  contains an open black cylindrical bore, nominally 26 mm wide and 50 mm deep.
+  The black region is the bore interior, not a solid cap or a surface to place the plug on.
+- Complete the 50 mm lift and verify transport clearance first. Align the actual silver pin axis/tip
+  with the BLACK bore rim, not the orange handle center or the blue housing center.
+  Front checks lateral Y alignment; Right Side checks X alignment. D reveals the rim,
+  tip, lateral offset, and shaft tilt. Compare the pin centerline with the actual opening
+  in these independent views; plausible alignment in D cannot overrule visible offset
+  in Front or Right Side. The bore has only about 3 mm radial clearance around the pin.
+- In D, a hovering tip and the hole have different heights and therefore oblique-view
+  parallax: do not demand coincident tip/hole pixels. Extrapolate the shaft axis to the
+  rim plane and center it in the opening, with clearance around the full pin outline,
+  cross-checking Front and Right Side. Partial silhouette overlap is not a fit.
+  At final approach, a pin edge clipping one rim side while the bore remains visible
+  on the other is evidence of possible offset, not insertion. Assess this asymmetry
+  using the rim plane and orthogonal views; oblique perspective does not require equal
+  pixel gaps. If alignment uncertainty is comparable to the 3 mm radial clearance,
+  restore an inspectable view and refine alignment before descending or declaring DONE.
+- Finish transport/alignment only when CURRENT views support this pin-axis/rim check.
+  A new stage, a previous DONE, or alignment with the housing does not establish entry
+  alignment. At the final approach and immediately before each downward step, recheck
+  D plus Front/Right Side; an earlier coarse alignment may no longer be sufficient.
+- Before entry, visible lateral offset or an unlocalized rim vetoes MV_DOWN and DONE
+  for transport/alignment or insertion. While the tip is clear above the rim, make a
+  SMALL lateral correction when its direction is justified. If the hand or pin hides
+  the rim, use a safe SMALL upward move to restore clearance and inspect, then realign.
+  A previously visible rim may help locate it against CURRENT fixed-camera landmarks;
+  it cannot override current offset or replace the final check. Use STOP only when no
+  correction or clearance move is justified, rather than repeating it despite a safe lift.
+- Choose LARGE only for clear travel, MEDIUM for approach, and SMALL near the rim/contact.
+  Correct translation and tilt in separate decisions, inspecting fresh images each time.
+  Once entry is visibly established, rim occlusion is expected: use current external
+  views, measured pose, and actual motion to judge insertion depth. Occlusion alone
+  does not require repeated withdrawal. A commanded descent or silhouette overlap is
+  not evidence of entry or seating. If motion stalls, lateral offset appears, or contact
+  blocks insertion, lift clear before lateral correction; do not slide against the rim,
+  keep pushing, or rotate inside the bore.
+- Use HISTORY-to-CURRENT comparisons to track the pin tip relative to the rim and the
+  handle relative to the fingertip pads. Successful TCP descent does NOT prove that
+  the plug descended. If the pin stays on the rim while the hand lowers, or the handle
+  shifts upward between the fingers, the plug is blocked/slipping: stop descent, lift
+  for clearance when safe, verify or re-establish secure handle contact, and realign.
+  Do not compensate for slippage with more downward steps or claim insertion from hand motion.
+- A plug hovering over the opening or resting on its rim is not inserted. Complete insertion
+  only when the pin is seated at insertion depth and the plug is supported by the socket.
+  Confirm visible seating before RELEASE, using external depth/seating cues when the rim
+  is occluded. A pin tip still above the rim is hovering. Do not release in the expectation
+  that gravity will finish insertion.
+  Release at the destination only after seating, then complete the distinct RETREAT stage below.
+
+RETREAT AFTER RELEASE:
+- RETREAT is the final withdrawal of the OPEN, empty hand from the seated plug. It is
+  distinct from the initial LIFT while carrying the plug. After release, choose one
+  MV_UP_LARGE (50 mm by default), then inspect a fresh observation before another action.
+- RETREAT DONE requires open fingers, the plug still seated and undisturbed, and the
+  TCP strictly MORE THAN {retreat_clearance_mm} mm vertically above the visible top of
+  the orange handle; aim for about {retreat_target_mm} mm to leave a margin, as specified
+  by the completion-clearance block. A merely visible gap or 50 mm of commanded hand
+  travel is insufficient: the starting TCP can be below the handle top. If clearance
+  remains short, choose an appropriate upward step and inspect again before DONE.
+- Judge the handle top from CURRENT images and mapped depth samples, not assumed
+  object coordinates. With Wrist looking straight down, sampled top-face depth minus
+  the calibrated camera-to-TCP depth estimates the TCP's vertical gap above that top.
+  Use the visible 32 mm-tall handle as an additional scale cue and cross-check Front
+  and Right Side. Do not apply the depth subtraction as world height with a tilted
+  wrist or to a hidden/unsampled top; use the current camera basis and views instead.
+  Measured TCP motion alone does not prove that the plug stayed seated.
+
+ATTENTION:
+{mem_text_rules}
+- DONE only when the current "DONE WHEN" condition is already visibly supported.
+- During RETREAT, the explicit TCP-to-plug-top clearance and open, undisturbed seating
+  checks override vague stage goals such as "clear gap" or "hand withdrawn". Do not
+  use the completed initial LIFT as evidence that final RETREAT is complete.
+- For MV_DOWN during insertion or DONE for transport/alignment, the one-sentence
+  reasoning must cite the CURRENT pin/rim alignment check in X (Right Side) and Y
+  (Front), cross-checked with D. During insertion, distinguish observed plug motion
+  from TCP motion; unsupported alignment means choose correction/inspection instead.
+{variable_step}
+{action_chunk}
+Think one visual sentence, then commit to exactly one atomic action.
+{output_contract}

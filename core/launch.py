@@ -920,6 +920,13 @@ def make_runner(
         wrist_tracking=bool(cfg.get("affordance_wrist_track", True)),
     )
     vstep = controller.variable_step_plugin
+    cartesian_actions = getattr(controller, "cartesian_actions", None)
+    if cartesian_actions is not None and (
+        plugins.enabled("mcq", default=False) or action_ablation_plugin.enabled
+        or action_chunk_plugin.enabled or getattr(controller.rotation_plugin, "enabled", False)
+    ):
+        raise ValueError("cartesian_motion requires the single-action protocol; disable "
+                         "mcq, action_ablation, action_chunk, and the legacy rotation plugin")
     if action_chunk_plugin.enabled and vstep is not None and vstep.enabled:
         # Both far-strategies stack: while the TARGET is far, each VLM decision commits
         # step_num coarse moves open-loop (no re-observation). Surface the resulting reach.
@@ -944,6 +951,9 @@ def make_runner(
                     fine_step_m=controller.step_m,
                     coarse_step_m=(vstep.coarse_step_m if (vstep is not None and vstep.enabled) else None),
                     large_step_m=(getattr(vstep, "large_step_m", None) if (vstep is not None and vstep.enabled) else None),
+                    step_sizes_text=(f"Bare MV_* moves {controller.step_m * 1000:g} mm; "
+                                     "sized tokens use the SMALL, MEDIUM, or LARGE sizes below"
+                                     if cartesian_actions is not None else None),
                 ),
                 mcq_plugin=McqPlugin(plugins.enabled("mcq", default=False)),
                 mem_text_plugin=mem_text_plugin,
@@ -959,6 +969,7 @@ def make_runner(
                 affordance_plugin=affordance_plugin,
                 action_ablation_plugin=action_ablation_plugin,
                 table_height_m=table_height_m,
+                cartesian_actions=cartesian_actions,
             )
         ),
     )
@@ -983,6 +994,7 @@ def make_runner(
         # Blind-mode review frames + action_table.json persistence; off -> inert.
         action_ablation_plugin=action_ablation_plugin,
         recent_moves_max=mem_text_plugin.max_recent,
+        visual_history_steps=int(cfg.get("visual_history_steps", 0)),
         viewer=viewer,
     )
 

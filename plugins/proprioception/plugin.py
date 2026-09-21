@@ -49,6 +49,7 @@ class ProprioceptionPlugin:
         coarse_step_m: Optional[float] = None,
         descend_stall_ratio: float = DESCEND_STALL_RATIO,
         large_step_m: Optional[float] = None,
+        step_sizes_text: Optional[str] = None,
     ) -> None:
         self.enabled = bool(enabled)
         # Above this height, suggest descending once horizontal alignment is established.
@@ -60,12 +61,15 @@ class ProprioceptionPlugin:
         self.fine_step_m = max(0.0, float(fine_step_m))
         self.coarse_step_m = None if coarse_step_m is None else max(0.0, float(coarse_step_m))
         self.large_step_m = None if large_step_m is None else float(large_step_m)
+        self.step_sizes_text = step_sizes_text
         # A MV_DOWN that travelled below this fraction of what was commanded is reported
         # as stalled (see DESCEND_STALL_RATIO).
         self.descend_stall_ratio = float(descend_stall_ratio)
 
     def _step_sizes_text(self) -> str:
         """A short clause naming the per-step move distance(s) the controller uses."""
+        if self.step_sizes_text is not None:
+            return self.step_sizes_text
         fine_cm = f"{self.fine_step_m * 100.0:g}"
         if self.coarse_step_m is None or self.coarse_step_m <= self.fine_step_m:
             return _fragment("step_sizes_fine").replace("{fine_cm}", fine_cm)
