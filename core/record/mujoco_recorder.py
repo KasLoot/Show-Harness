@@ -15,10 +15,12 @@ from core.record.images import StreamingVideoWriter
 
 CAMERAS = ("side", "wrist", "front")
 GLOBAL_CAMERA = "lab_overview"
+GLOBAL_VIDEO_SIZE = (1920, 1080)
 
 
 class MujocoRecorder:
-    def __init__(self, session, directory, *, fps=30, decision_hold_s=1.0, model="", task=""):
+    def __init__(self, session, directory, *, fps=30, decision_hold_s=1.0, model="", task="",
+                 global_video=False):
         self.fps = float(fps)
         hold = float(decision_hold_s)
         if not math.isfinite(self.fps) or not 1 <= self.fps <= 60:
@@ -27,10 +29,11 @@ class MujocoRecorder:
             raise ValueError("recording.decision_hold_s must be between 0 and 10")
         self.session = session
         self.cameras = tuple(getattr(session, "cameras", CAMERAS))
-        # This view belongs only to the combined recording. Never add it to the
+        # This view belongs only to recordings. Never add it to the
         # session's observation cameras or the per-camera VLM image streams.
         self.global_camera = None
-        self._global_renderer = None
+        self.global_video = global_video
+        self._global_renderers = {}
         if getattr(session, "model", None) is not None:
             try:
                 session.model.camera(GLOBAL_CAMERA)
@@ -38,15 +41,21 @@ class MujocoRecorder:
                 pass
             else:
                 self.global_camera = GLOBAL_CAMERA
+        if self.global_video and self.global_camera is None:
+            raise ValueError(f"Separate global video requires the {GLOBAL_CAMERA!r} camera")
         self.hold_frames = max(1, round(hold * self.fps))
         self.directory = Path(directory)
         self.directory.mkdir(parents=True, exist_ok=True)
-        self.paths = {name: self.directory / f"{name}.mp4" for name in (*self.cameras, "combined")}
+        video_names = (*self.cameras, "combined") + (("global",) if self.global_video else ())
+        self.paths = {name: self.directory / f"{name}.mp4" for name in video_names}
         self.paths["annotations"] = self.directory / "annotations.jsonl"
         self._resources = ExitStack()
         self._log = self._resources.enter_context(self.paths["annotations"].open("w", encoding="utf-8"))
-        self.writers = {name: StreamingVideoWriter(self.paths[name], self.fps)
-                        for name in (*self.cameras, "combined")}
+        # 1080 is not divisible by 16: disable automatic macroblock resizing for
+        # the standalone video so the encoder preserves exactly 1920 x 1080.
+        self.writers = {name: StreamingVideoWriter(self.paths[name], self.fps,
+                                                  macro_block_size=1 if name == "global" else 16)
+                        for name in video_names}
         for writer in self.writers.values():
             self._resources.callback(writer.close)
         self.frame_count = 0
@@ -63,7 +72,10 @@ class MujocoRecorder:
         self.action_font = _font(max(12, round(size * 36 / 512)), bold=True)
         try:
             self.event("recording_started", fps=self.fps, model=model, task=task, cameras=self.cameras,
-                       combined_only_cameras=[self.global_camera] if self.global_camera else [],
+                       combined_only_cameras=[self.global_camera]
+                       if self.global_camera and not self.global_video else [],
+                       global_video_camera=self.global_camera if self.global_video else None,
+                       global_video_resolution=GLOBAL_VIDEO_SIZE if self.global_video else None,
                        video_files={key: str(value) for key, value in self.paths.items()})
             self.capture(force=True)
         except BaseException:
@@ -111,6 +123,8 @@ class MujocoRecorder:
             global_frame = self._render_global(canvas.shape[0] - 32)
             canvas = self._append_global(canvas, global_frame)
         frames["combined"] = canvas
+        if self.global_video:
+            frames["global"] = self._render_global(*GLOBAL_VIDEO_SIZE)
         for _ in range(repeat):
             for name, frame in frames.items():
                 self.writers[name].append(frame)
@@ -118,9 +132,11 @@ class MujocoRecorder:
         while self._next_time <= now + 1e-9:
             self._next_time += 1 / self.fps
 
-    def _render_global(self, size):
+    def _render_global(self, width, height=None):
         """Recorder-owned render context; no observations or physics advances."""
-        if self._global_renderer is None:
+        height = width if height is None else height
+        renderer = self._global_renderers.get((width, height))
+        if renderer is None:
             import mujoco
 
             settings = self.session.model.vis.global_
@@ -128,15 +144,15 @@ class MujocoRecorder:
             try:
                 # MjrContext allocates its own framebuffer at construction.
                 # Restore model settings so normal camera buffers stay small.
-                settings.offwidth = max(old_width, size)
-                settings.offheight = max(old_height, size)
-                renderer = mujoco.Renderer(self.session.model, height=size, width=size)
+                settings.offwidth = max(old_width, width)
+                settings.offheight = max(old_height, height)
+                renderer = mujoco.Renderer(self.session.model, height=height, width=width)
             finally:
                 settings.offwidth, settings.offheight = old_width, old_height
             self._resources.callback(renderer.close)
-            self._global_renderer = renderer
-        self._global_renderer.update_scene(self.session.data, camera=self.global_camera)
-        return self._global_renderer.render().copy()
+            self._global_renderers[width, height] = renderer
+        renderer.update_scene(self.session.data, camera=self.global_camera)
+        return renderer.render().copy()
 
     def _append_global(self, canvas, global_frame):
         height, width = canvas.shape[:2]

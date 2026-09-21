@@ -1,3 +1,14 @@
+# Quickstart
+```bash
+python scripts/run_mujoco.py \
+  --gui \
+  --record \
+  --record-global \
+  --vlm-backend openai \
+  --robot-config configs/robot_mujoco_plug.yaml
+```
+
+
 # Simulators
 
 Show-Harness integrates MuJoCo, ManiSkill, and RoboLab (Isaac Lab). They serve two roles:
@@ -46,6 +57,8 @@ uv run --no-project python scripts/run_mujoco.py --smoke-test --record
 uv run --no-project python scripts/run_mujoco.py
 # Add --record to save videos and their annotated timeline.
 uv run --no-project python scripts/run_mujoco.py --record
+# Add --record-global for a separate clean 1920x1080 global lab video (also enables --record).
+uv run --no-project python scripts/run_mujoco.py --record-global
 # Use the existing Gemini profile instead (requires GEMINI_API_KEY):
 uv run --no-project python scripts/run_mujoco.py --vlm-backend gemini
 # Use Kimi K3 via Ollama instead (requires OLLAMA_API_KEY):
@@ -385,6 +398,7 @@ Recording is disabled by default. Add `--record` (also with `--gui` or
 | `wrist_insert.mp4` | Plug only: oblique hand-mounted Angled Wrist view |
 | `wrist_depth.mp4` | Plug only: local diagnostic grayscale depth aligned with Wrist RGB; not sent to the VLM |
 | `combined.mp4` | Existing camera/decision canvas intact on the left, with a full-height global lab view appended on the right |
+| `global.mp4` | Optional: clean native 1920 × 1080 render from the fixed `lab_overview` camera, without a title or overlays |
 | `annotations.jsonl` | Timestamped decisions, full VLM output, execution, recovery, and results |
 
 The camera videos are 512 × 512 at the default resolution. The original task's
@@ -394,15 +408,20 @@ remains intact on the left, with Wrist Depth and the decision panel in its last
 row. Its combined recording is 2624 × 1632, including the 1600 × 1600 global
 image and its title bar on the right. This fixed `lab_overview` camera is captured
 only by the recorder, independently of the movable GUI. It is absent from VLM
-images, depth input, and visual history; no separate global MP4 is written.
-All videos in a run have identical frame counts and run at
-30 fps. Frames are captured during physics steps, so the recordings show the
-motion between actions. Cloud waiting time is omitted; each action's result is
-held for one second for readability. These video pauses do not advance physics.
+images, depth input, and visual history. Append `--record-global` to `--record` to
+write `videos/global.mp4` at the native 1920 × 1080 resolution, with no title or
+overlays. The equivalent config is `recording.global_video: true` when recording
+is enabled. The default `--record` output does not include this separate file.
+All videos in a run, including the optional global video, have identical frame
+counts and run at 30 fps with the same frame timing. Frames are captured during
+physics steps, so the recordings show the motion between actions. Cloud waiting
+time is omitted; each action's result is held for one second for readability.
+These video pauses do not advance physics.
 Change `recording.fps` and `recording.decision_hold_s` in the config to tune
 recording. MuJoCo uses this synchronized recorder instead of the generic per-decision
-analysis video. Without `--record`, no videos are created; ordinary step logs and observation images are still
-saved. `summary.json` and the printed `video_path` point to the combined video
+analysis video. Without either recording flag, no videos are created; ordinary
+step logs and observation images are still saved. `summary.json` and the printed
+`video_path` point to the combined video
 when recording is enabled and use an empty string otherwise.
 
 Each annotation includes UTC, simulation time, video time, frame index, stage,

@@ -224,9 +224,10 @@ class StreamingVideoWriter:
     fragment's frame.)
     """
 
-    def __init__(self, live_path: str | Path, fps: float) -> None:
+    def __init__(self, live_path: str | Path, fps: float, *, macro_block_size: int = 16) -> None:
         self.live_path = Path(live_path)
         self.fps = float(fps)
+        self.macro_block_size = macro_block_size
         self._writer = None
         self._count = 0
 
@@ -243,6 +244,7 @@ class StreamingVideoWriter:
                 fps=self.fps,
                 codec="libx264",
                 quality=8,
+                macro_block_size=self.macro_block_size,
                 # Intra-only + zerolatency: no encoder lookahead/GOP buffering, so
                 # EVERY appended frame is flushed to disk as its own fragment --
                 # the crash-safety guarantee. (Analysis videos are a few hundred

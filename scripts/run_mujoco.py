@@ -87,12 +87,17 @@ def main(argv=None) -> int:
     parser.add_argument("--smoke-test", action="store_true", help="Check physics/cameras without an API call")
     parser.add_argument("--debug", action="store_true")
     parser.add_argument("--record", action="store_true", help="Enable video recording (disabled by default)")
+    parser.add_argument("--record-global", action="store_true",
+                        help="Also save a separate 1920x1080 global.mp4 (implies --record)")
     parser.add_argument("--variable-step", action="store_true", help="Enable automatic 2/5/10 cm movement steps")
     parser.add_argument("--cartesian-motion", action="store_true",
                         help="Enable VLM-selected small/medium/large translations and XYZ rotations")
     args = parser.parse_args(argv)
+    args.record = args.record or args.record_global
     load_secrets_env()
     cfg = load_yaml(args.robot_config)
+    if args.record_global:
+        cfg.setdefault("recording", {})["global_video"] = True
     if args.cartesian_motion:
         cfg.setdefault("cartesian_motion", {})
     if args.variable_step and cfg.get("cartesian_motion") is not None:

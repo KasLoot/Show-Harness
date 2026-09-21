@@ -9,7 +9,7 @@ from unittest.mock import Mock, patch
 import imageio.v2 as imageio
 import numpy as np
 
-from core.record.mujoco_recorder import CAMERAS, GLOBAL_CAMERA, MujocoRecorder
+from core.record.mujoco_recorder import CAMERAS, GLOBAL_CAMERA, GLOBAL_VIDEO_SIZE, MujocoRecorder
 
 
 class Scene:
@@ -75,6 +75,95 @@ class GlobalRenderer:
 
 
 class RecordingTests(unittest.TestCase):
+    def test_separate_global_video_is_full_hd_and_synchronized(self):
+        for scene_type in (Scene, DepthPlugScene):
+            with self.subTest(scene=scene_type.__name__), TemporaryDirectory() as directory:
+                scene = scene_type()
+                scene.model = recording_model()
+                observation_cameras = tuple(getattr(scene, "cameras", CAMERAS))
+                factory = Mock(side_effect=GlobalRenderer)
+                with patch.dict("sys.modules", {"mujoco": SimpleNamespace(Renderer=factory)}):
+                    recorder = MujocoRecorder(scene, directory, fps=10, decision_hold_s=0.2,
+                                              global_video=True)
+                    self.addCleanup(recorder.close)
+                    recorder.begin_step(step_idx=0, stage="LIFT", token="MV_UP", annotation="Lift.")
+                    scene.data.time = 1.1
+                    recorder.capture()
+                    recorder.end_step({"act": "MV_UP"})
+                    recorder.finish(False, "max_steps_exceeded")
+                    recorder.close()
+
+                self.assertEqual(scene.data.time, 1.1)
+                self.assertEqual(recorder.cameras, observation_cameras)
+                self.assertEqual(set(recorder.paths), {*observation_cameras, "combined", "global", "annotations"})
+                self.assertEqual(factory.call_count, 2)
+                factory.assert_any_call(scene.model, height=1080, width=1920)
+                renderer = recorder._global_renderers[GLOBAL_VIDEO_SIZE]
+                self.assertEqual(renderer.initial_buffer, GLOBAL_VIDEO_SIZE)
+                expected_captures = [(time, GLOBAL_CAMERA, 256, 256)
+                                     for time in (1.0, 1.0, 1.1, 1.1, 1.1)]
+                for context in recorder._global_renderers.values():
+                    self.assertEqual(context.captures, expected_captures)
+                    context.close.assert_called_once_with()
+                self.assertEqual((scene.model.vis.global_.offwidth, scene.model.vis.global_.offheight),
+                                 (256, 256))
+                self.assertEqual(recorder.frame_count, 7)
+                events = [json.loads(line) for line in recorder.paths["annotations"].read_text().splitlines()]
+                self.assertEqual(events[0]["cameras"], list(observation_cameras))
+                self.assertEqual(events[0]["combined_only_cameras"], [])
+                self.assertEqual(events[0]["global_video_camera"], GLOBAL_CAMERA)
+                self.assertEqual(events[0]["global_video_resolution"], [1920, 1080])
+                self.assertEqual(events[0]["video_files"]["global"], str(Path(directory) / "global.mp4"))
+                for name in (*observation_cameras, "combined", "global"):
+                    with imageio.get_reader(recorder.paths[name]) as reader:
+                        self.assertEqual(reader.count_frames(), recorder.frame_count)
+                        self.assertEqual(reader.get_meta_data()["fps"], 10)
+                        if name == "global":
+                            for index, time in enumerate((1.0, 1.0, 1.1, 1.1, 1.1, 1.1, 1.1)):
+                                frame = reader.get_data(index)
+                                # Check decoded dimensions, catching encoder padding to 1088.
+                                self.assertEqual(frame.shape, (1080, 1920, 3))
+                                # Corner pixels ensure the export has no title or letterbox.
+                                for row, col in ((0, 0), (540, 960), (1079, 1919)):
+                                    np.testing.assert_allclose(frame[row, col], renderer.color(time), atol=8)
+                        elif name == "combined":
+                            base = recorder._canvas({cam: scene.render(cam) for cam in observation_cameras}, 0)
+                            height, width = base.shape[:2]
+                            self.assertEqual(reader.get_data(0).shape, (height, width + height - 32, 3))
+
+    def test_separate_global_video_requires_camera_before_opening_files(self):
+        with TemporaryDirectory() as directory:
+            scene = Scene()
+            for model in (None, recording_model()):
+                scene.model = model
+                if model is not None:
+                    model.camera.side_effect = KeyError(GLOBAL_CAMERA)
+                with self.subTest(model=model), self.assertRaisesRegex(ValueError, GLOBAL_CAMERA):
+                    MujocoRecorder(scene, directory, global_video=True)
+                self.assertEqual(list(Path(directory).iterdir()), [])
+
+    def test_separate_global_renderer_failure_closes_existing_context(self):
+        with TemporaryDirectory() as directory:
+            scene = Scene()
+            scene.model = recording_model()
+            contexts = []
+
+            def create_renderer(model, *, height, width):
+                if width == 1920:
+                    self.assertEqual((model.vis.global_.offwidth, model.vis.global_.offheight), (1920, 1080))
+                    raise RuntimeError("Full HD context failed")
+                renderer = GlobalRenderer(model, height=height, width=width)
+                contexts.append(renderer)
+                return renderer
+
+            with patch.dict("sys.modules", {"mujoco": SimpleNamespace(Renderer=create_renderer)}):
+                with self.assertRaisesRegex(RuntimeError, "Full HD context failed"):
+                    MujocoRecorder(scene, directory, global_video=True)
+            self.assertEqual(len(contexts), 1)
+            contexts[0].close.assert_called_once_with()
+            self.assertEqual((scene.model.vis.global_.offwidth, scene.model.vis.global_.offheight), (256, 256))
+            self.assertFalse(list(Path(directory).glob("*.mp4")))
+
     def test_global_recording_appends_canvas_and_stays_synchronized(self):
         for scene_type in (Scene, DepthPlugScene):
             with self.subTest(scene=scene_type.__name__), TemporaryDirectory() as directory:
@@ -94,9 +183,9 @@ class RecordingTests(unittest.TestCase):
                 with patch.dict("sys.modules", {"mujoco": SimpleNamespace(Renderer=factory)}):
                     recorder = MujocoRecorder(scene, directory, fps=10, decision_hold_s=0.2)
                     self.addCleanup(recorder.close)
-                    renderer = recorder._global_renderer
                     base = recorder._canvas({name: original_render(name) for name in scene.cameras}, 0)
                     height, width = base.shape[:2]
+                    renderer = recorder._global_renderers[height - 32, height - 32]
                     overview = np.broadcast_to(np.array((75, 55, 180), np.uint8),
                                                (height - 32, height - 32, 3)).copy()
                     expanded = recorder._append_global(base, overview)

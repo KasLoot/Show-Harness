@@ -166,8 +166,11 @@ The original task sends Wrist (A), Front (B), and Right Side (C) views to the VL
 views are orthographic and look down at 30 degrees, separating horizontal Y and X
 alignment. Add `--record` to save synchronized Side, Wrist, and Front camera videos,
 a combined video with the camera/decision canvas on the left and a recording-only
-global lab view on the right, and an annotated log. Add `--variable-step` for automatic 2 cm / 5 cm / 10 cm
-movements; without it, steps stay at 2 cm. Both flags are off by default. See [MuJoCo setup](docs/simulators.md#mujoco--cloud-models)
+global lab view on the right, and an annotated log. Append `--record-global` to also
+write `videos/global.mp4`, a clean native 1920×1080 render from the fixed
+`lab_overview` camera (it implies `--record`). Add `--variable-step` for automatic
+2 cm / 5 cm / 10 cm movements; without it, steps stay at 2 cm. All flags are off by
+default. See [MuJoCo setup](docs/simulators.md#mujoco--cloud-models)
 for the offline smoke test, configuration, and recording options.
 Change `vlm_backends.openai.model` in `configs/robot_mujoco.yaml`, set `OPENAI_MODEL`,
 or pass `--model MODEL_NAME` for one run (the CLI override takes precedence).
